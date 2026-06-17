@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Wendsharp/WendSharp.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Wendsharp.Tests/WendSharp.Tests.csproj" />
+  </Folder>
+</Solution>

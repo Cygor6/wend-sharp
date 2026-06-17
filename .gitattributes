@@ -1,0 +1,49 @@
+# =============================================================================
+# .gitattributes — enforce LF line endings everywhere for cross-platform consistency
+# =============================================================================
+
+# Auto-detect text files, normalize to LF on checkout
+* text=auto eol=lf
+
+# Source code — LF, UTF-8
+*.cs       text eol=lf
+*.csproj   text eol=lf
+*.slnx     text eol=lf
+*.props    text eol=lf
+*.targets  text eol=lf
+
+# Scripts & config — LF
+*.ps1      text eol=lf
+*.psm1     text eol=lf
+*.psd1     text eol=lf
+*.sh       text eol=lf
+*.mjs      text eol=lf
+*.js       text eol=lf
+
+# Data & markup — LF
+*.json     text eol=lf
+*.jsonc    text eol=lf
+*.yaml     text eol=lf
+*.yml      text eol=lf
+*.md       text eol=lf
+*.xml      text eol=lf
+*.pubxml   text eol=lf
+
+# Git metadata
+*.gitignore  text eol=lf
+*.editorconfig text eol=lf
+.gitattributes text eol=lf
+
+# Binary files — no normalization
+*.dll      binary
+*.exe      binary
+*.pdb      binary
+*.snk      binary
+*.pfx      binary
+*.duckdb   binary
+*.onnx     binary
+*.png      binary
+*.jpg      binary
+*.ico      binary
+*.zip      binary
+*.nupkg    binary

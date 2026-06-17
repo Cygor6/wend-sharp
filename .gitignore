@@ -1,0 +1,30 @@
+# .NET
+bin/
+obj/
+*.user
+*.pubxml.user
+.vs/
+.claude/settings.local.json
+
+# Goose session files
+.goose/sessions/
+.goose/recipe.yaml
+
+# Claude session files
+.claude/
+
+# Environment / secrets
+*.env
+.env.*
+
+# Test artifacts
+test-*
+smoke-*
+todo/
+
+# Build output
+publish/
+models/embeddinggemma
+test_bug1
+nul
+.zed/
