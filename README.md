@@ -1,8 +1,19 @@
+<div align="center">
+
 # wend-sharp
 
-A **read-only** MCP server for the Zed editor that gives an AI agent compiler-verified information
-about a C# codebase via Roslyn. wendsharp never edits code — the agent makes the edits; wendsharp supplies
-the truth (references, structure, signatures, dependencies, diagnostics) and a **validation loop**.
+**Help AI assistants refactor your C# codebase**
+
+Give your agents a compounding knowledge layer — semantically searchable, temporally tracked, and synthesized across sessions — instead of starting cold every time.
+
+[![.NET 10](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
+[![C# 14](https://img.shields.io/badge/C%23-14-239120?logo=csharp&logoColor=white)](https://learn.microsoft.com/dotnet/csharp/)
+[![MCP](https://img.shields.io/badge/protocol-MCP-orange)](https://modelcontextprotocol.io/)
+[![License](https://img.shields.io/badge/license-Apache--2.0%20%2B%20Commons%20Clause-blue)](#license)
+
+</div>
+
+A **read-only** MCP server for the Zed editor that gives an AI agent compiler-verified information about a C# codebase via Roslyn. wendsharp never edits code — the agent makes the edits; wendsharp supplies the truth (references, structure, signatures, dependencies, diagnostics) and a **validation loop**.
 
 ## What wend-sharp does
 
@@ -124,17 +135,6 @@ Then open the Agent Panel → Settings and confirm the green "Server is active" 
 in your prompt so the model picks its tools. Because these tools are read-only, you can safely
 auto-approve them per-tool (key form `mcp:wendsharp:<tool_name>`) or via
 `agent.tool_permissions.default`.
-
-## `includeQuality` note
-
-`GetDiagnostics` accepts an optional `includeQuality` parameter. When `true`, wendsharp loads
-**Roslynator.Analyzers** headless (no refactorings — there is no public run API for those) and merges
-their diagnostics with compiler diagnostics. The analyzer DLLs are loaded via a minimal
-`IAnalyzerAssemblyLoader` (`Assembly.LoadFrom`), probed from the NuGet global packages cache.
-
-**Fallback:** if the Roslynator analyzer assemblies cannot be loaded (e.g. version mismatch against
-CodeAnalysis 5.x), wendsharp catches the error, logs the reason to **stderr**, and returns compiler
-diagnostics only. No tool call fails — it degrades gracefully.
 
 ### Agent workflow: safe rename via `PlanRename`
 

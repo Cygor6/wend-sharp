@@ -82,8 +82,7 @@ Re-reads files from disk into wendsharp's model. wendsharp is blind to your edit
 ## GetDiagnostics — your truth check
 Compiler errors (and warnings if asked) for the project's current in-memory state — current only if
 you `Refresh`ed first.
-- `includeWarnings`: add warnings. `includeQuality`: also run Roslynator quality diagnostics
-  (degrades to compiler-only if unavailable). `filePaths`: scope to specific files (e.g. the ones you
+- `includeWarnings`: add warnings.`filePaths`: scope to specific files (e.g. the ones you
   just edited).
 - Returns `ErrorCount` (for the filtered set) and `Diagnostics[]` (code, message, file, line, column,
   severity).
