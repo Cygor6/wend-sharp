@@ -92,9 +92,6 @@ public static class ContextWalker
     }
 }
 
-// C# 14: extension members — new syntax that allows extending types without instance methods.
-// Declared in a top-level static class; the extension block targets ISymbol.
-// These appear as extension methods but are defined in an extension block.
 public static class SymbolExtensions
 {
     extension(ISymbol symbol)
@@ -108,16 +105,8 @@ public static class SymbolExtensions
     }
 }
 
-/// <summary>
-/// Shared Roslyn display formats and helpers.
-/// </summary>
 public static class RoslynFormats
 {
-    /// <summary>
-    /// Full signature format: fully-qualified types, nullable annotations, accessibility,
-    /// modifiers, parameter names/defaults. Used by DescribeSymbol and AnalyzeMember so the
-    /// agent gets compiler-resolved types (never `var`).
-    /// </summary>
     public static readonly SymbolDisplayFormat FullSignature = new(
         typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
         memberOptions:
