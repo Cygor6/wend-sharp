@@ -85,8 +85,8 @@ public class WendSharpToolsTests
         var analysis = await tools.AnalyzeMember(
             "App", "SampleApp.Calculator", "Add", ct: CancellationToken.None);
 
-        await Assert.That(analysis.ReadVariables).Contains("a");
-        await Assert.That(analysis.ReadVariables).Contains("b");
+        await Assert.That(analysis.DataFlowsIn).Contains("a");
+        await Assert.That(analysis.DataFlowsIn).Contains("b");
     }
 
     [Test]
@@ -97,8 +97,8 @@ public class WendSharpToolsTests
         var analysis = await tools.AnalyzeMember(
             "App", "SampleApp.PropertyFlowExample", "BlockProperty", ct: CancellationToken.None);
 
-        await Assert.That(analysis.ReadVariables.Contains("value")).IsTrue();
-        await Assert.That(analysis.ReadVariables.Length).IsGreaterThan(0);
+        await Assert.That(analysis.DataFlowsIn.Contains("value")).IsTrue();
+        await Assert.That(analysis.DataFlowsIn.Length).IsGreaterThan(0);
 
         await Assert.That(analysis.InternalDependencies.Any(d => d.Contains("_backing"))).IsTrue();
     }
@@ -111,7 +111,7 @@ public class WendSharpToolsTests
         var analysis = await tools.AnalyzeMember(
             "App", "SampleApp.PropertyFlowExample", "InitOnlyProperty", ct: CancellationToken.None);
 
-        await Assert.That(analysis.ReadVariables.Contains("value")).IsTrue();
+        await Assert.That(analysis.DataFlowsIn.Contains("value")).IsTrue();
 
         await Assert.That(analysis.InternalDependencies.Any(d => d.Contains("_backing"))).IsTrue();
     }
@@ -124,8 +124,8 @@ public class WendSharpToolsTests
         var analysis = await tools.AnalyzeMember(
             "App", "SampleApp.PropertyFlowExample", "AutoProperty", ct: CancellationToken.None);
 
-        await Assert.That(analysis.ReadVariables.Length).IsEqualTo(0);
-        await Assert.That(analysis.WrittenVariables.Length).IsEqualTo(0);
+        await Assert.That(analysis.DataFlowsIn.Length).IsEqualTo(0);
+        await Assert.That(analysis.DataFlowsOut.Length).IsEqualTo(0);
     }
 
     [Test]
@@ -136,8 +136,8 @@ public class WendSharpToolsTests
         var analysis = await tools.AnalyzeMember(
             "App", "SampleApp.EventFlowExample", "CustomEvent", ct: CancellationToken.None);
 
-        await Assert.That(analysis.ReadVariables.Contains("value")).IsTrue();
-        await Assert.That(analysis.ReadVariables.Length).IsGreaterThan(0);
+        await Assert.That(analysis.DataFlowsIn.Contains("value")).IsTrue();
+        await Assert.That(analysis.DataFlowsIn.Length).IsGreaterThan(0);
 
         await Assert.That(analysis.InternalDependencies.Any(d => d.Contains("_handler"))).IsTrue();
     }
@@ -872,5 +872,152 @@ static int GetArg(string name)
         await Assert.That(desc.RequiredUsings).Contains("System.Threading.Tasks");
         await Assert.That(desc.RequiredUsings).Contains("SampleApp.Domain");
         await Assert.That(desc.RequiredUsings).Contains("SampleApp.Billing");
+    }
+
+    // =========================================================================
+    // Task 1 — DescribeSymbol: Declaration field
+    // =========================================================================
+
+    [Test]
+    public async Task DescribeSymbol_Declaration_SealedRecord()
+    {
+        var tools = await CreateToolsAsync();
+        var desc = await tools.DescribeSymbol("App", "SampleApp.Tag", CancellationToken.None);
+
+        await Assert.That(desc.Error).IsNull();
+        await Assert.That(desc.Declaration.Contains("sealed")).IsTrue();
+        await Assert.That(desc.Declaration.Contains("record")).IsTrue();
+        await Assert.That(desc.Declaration.Contains("struct")).IsFalse();
+        await Assert.That(desc.Declaration.Contains("Tag")).IsTrue();
+    }
+
+    [Test]
+    public async Task DescribeSymbol_Declaration_ReadonlyRecordStruct()
+    {
+        var tools = await CreateToolsAsync();
+        var desc = await tools.DescribeSymbol("App", "SampleApp.Point", CancellationToken.None);
+
+        await Assert.That(desc.Error).IsNull();
+        await Assert.That(desc.Declaration.Contains("readonly")).IsTrue();
+        await Assert.That(desc.Declaration.Contains("record struct")).IsTrue();
+        await Assert.That(desc.Declaration.Contains("Point")).IsTrue();
+    }
+
+    [Test]
+    public async Task DescribeSymbol_Declaration_StaticClass()
+    {
+        var tools = await CreateToolsAsync();
+        var desc = await tools.DescribeSymbol("App", "SampleApp.Calculator", CancellationToken.None);
+
+        await Assert.That(desc.Error).IsNull();
+        await Assert.That(desc.Declaration.Contains("static")).IsTrue();
+        await Assert.That(desc.Declaration.Contains("class")).IsTrue();
+        await Assert.That(desc.Declaration.Contains("Calculator")).IsTrue();
+    }
+
+    [Test]
+    public async Task DescribeSymbol_Declaration_Interface()
+    {
+        var tools = await CreateToolsAsync();
+        var desc = await tools.DescribeSymbol("App", "SampleApp.IComputable", CancellationToken.None);
+
+        await Assert.That(desc.Error).IsNull();
+        await Assert.That(desc.Declaration.Contains("interface")).IsTrue();
+        await Assert.That(desc.Declaration.Contains("IComputable")).IsTrue();
+    }
+
+    [Test]
+    public async Task DescribeSymbol_Declaration_AbstractClass()
+    {
+        var tools = await CreateToolsAsync();
+        var desc = await tools.DescribeSymbol("App", "SampleApp.PricingService", CancellationToken.None);
+
+        await Assert.That(desc.Error).IsNull();
+        await Assert.That(desc.Declaration.Contains("abstract")).IsTrue();
+        await Assert.That(desc.Declaration.Contains("class")).IsTrue();
+        await Assert.That(desc.Declaration.Contains("PricingService")).IsTrue();
+    }
+
+    [Test]
+    public async Task DescribeSymbol_Declaration_GenericWithConstraint()
+    {
+        var tools = await CreateToolsAsync();
+        var desc = await tools.DescribeSymbol("App", "Repository", CancellationToken.None);
+
+        await Assert.That(desc.Error).IsNull();
+        await Assert.That(desc.Declaration.Contains("class")).IsTrue();
+        await Assert.That(desc.Declaration.Contains("Repository")).IsTrue();
+        await Assert.That(desc.Declaration.Contains("where T : class")).IsTrue();
+    }
+
+    // =========================================================================
+    // Task 2 — AnalyzeMember: DataFlowsIn / DataFlowsOut / Captured
+    // =========================================================================
+
+    [Test]
+    public async Task AnalyzeMember_LambdaCapture_IsReportedInCaptured()
+    {
+        var tools = await CreateToolsAsync();
+        var analysis = await tools.AnalyzeMember(
+            "App", "OrderService", "MakeScaler", ct: CancellationToken.None);
+
+        await Assert.That(analysis.Error).IsNull();
+        await Assert.That(analysis.Captured.Contains("multiplier")).IsTrue();
+        await Assert.That(analysis.DataFlowsIn.Length).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task AnalyzeMember_StraightLineMethod_CapturedIsEmpty()
+    {
+        var tools = await CreateToolsAsync();
+        var analysis = await tools.AnalyzeMember(
+            "App", "OrderService", "CalculateTotal", ct: CancellationToken.None);
+
+        await Assert.That(analysis.Error).IsNull();
+        await Assert.That(analysis.Captured.Length).IsEqualTo(0);
+        await Assert.That(analysis.DataFlowsIn.Contains("orderAmount")).IsTrue();
+    }
+
+    // =========================================================================
+    // Task 3 — Diagnostics & rename conflicts: Preview field
+    // =========================================================================
+
+    [Test, NotInParallel]
+    public async Task GetDiagnostics_Preview_IsNonEmptyForError()
+    {
+        try
+        {
+            var tools = await CreateToolsAsync();
+
+            const string broken =
+                "namespace SampleApp;\npublic static class Program\n{\n    public static void Main() { BrokenSyntax }\n}\n";
+            await File.WriteAllTextAsync(ProgramPath, broken, CancellationToken.None);
+            await tools.Refresh([ProgramPath], CancellationToken.None);
+
+            var diags = await tools.GetDiagnostics("App", ct: CancellationToken.None);
+            var errors = diags.Diagnostics.Where(d => d.Severity == "Error").ToArray();
+
+            await Assert.That(errors.Length).IsGreaterThan(0);
+            await Assert.That(errors.All(e => !string.IsNullOrEmpty(e.Preview))).IsTrue();
+            await Assert.That(errors.Any(e => e.Preview.Contains("BrokenSyntax"))).IsTrue();
+        }
+        finally
+        {
+            await File.WriteAllTextAsync(ProgramPath, KnownGoodProgram, CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task PlanRename_NameCollision_ConflictPreviewIsNonEmpty()
+    {
+        var tools = await CreateToolsAsync();
+        var plan = await tools.PlanRename(
+            projectName: "App", fullyQualifiedSymbolName: "Alpha", newName: "Beta",
+            ct: CancellationToken.None);
+
+        await Assert.That(plan.HasConflicts).IsTrue();
+        var errorConflicts = plan.Conflicts.Where(c => c.Severity == "Error").ToArray();
+        await Assert.That(errorConflicts.Length).IsGreaterThan(0);
+        await Assert.That(errorConflicts.All(c => !string.IsNullOrEmpty(c.Preview))).IsTrue();
     }
 }

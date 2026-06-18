@@ -9,7 +9,7 @@ public readonly record struct FindReferencesResult(
     string Symbol, string Kind, int Total, ReferenceHit[] References, string? Error = null);
 
 public readonly record struct DiagnosticDto(
-    string Code, string Message, string FilePath, int Line, int Column, string Severity);
+    string Code, string Message, string FilePath, int Line, int Column, string Severity, string Preview);
 
 public readonly record struct DiagnosticsResult(
     string Project, int ErrorCount, DiagnosticDto[] Diagnostics, string? Error = null);
@@ -34,12 +34,13 @@ public readonly record struct WorkspaceInfoResult(
 public readonly record struct MemberSignature(string Kind, string Signature, string FilePath, int Line);
 
 public readonly record struct SymbolDescription(
-    string FullName, string[] BaseTypes, string[] RequiredUsings, MemberSignature[] Members, string? Error = null);
+    string FullName, string Declaration, string[] BaseTypes, string[] RequiredUsings, MemberSignature[] Members, string? Error = null);
 
 public readonly record struct MemberAnalysis(
     string Source, string FilePath, int LineStart, int LineEnd,
     string[] InternalDependencies, string[] ExternalDependencies,
-    string[] ReadVariables, string[] WrittenVariables, ReferenceHit[] Callers, string? Error = null);
+    string[] DataFlowsIn, string[] DataFlowsOut, string[] Captured,
+    ReferenceHit[] Callers, string? Error = null);
 
 public readonly record struct RenameScope(
     bool RenameOverloads,
@@ -62,7 +63,8 @@ public readonly record struct RenameConflict(
     string Id,                        // e.g. "CS0102"
     string Message,
     string FilePath,
-    int Line, int Column);
+    int Line, int Column,
+    string Preview);                  // trimmed source line at the location
 
 public readonly record struct CascadeTarget(
     string Symbol,

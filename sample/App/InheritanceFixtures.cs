@@ -24,3 +24,8 @@ public class SeasonalDiscountPricingService : DiscountPricingService
 {
     public override decimal CalculateTotal(decimal subtotal) => base.CalculateTotal(subtotal) * 0.95m;
 }
+
+public class Repository<T> where T : class
+{
+    public T? Find(int id) => default;
+}

@@ -280,6 +280,7 @@ public sealed class WendSharpTools(WorkspaceSession session)
             var baseTypes = BuildBaseTypes(symbol);
             return new SymbolDescription(
                 symbol.ToDisplayString(),
+                BuildTypeHeader(symbol),
                 [.. baseTypes],
                 [.. usingSet.Order()],
                 [.. members]);
@@ -287,7 +288,7 @@ public sealed class WendSharpTools(WorkspaceSession session)
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            return new SymbolDescription("", [], [], [], ex.Message);
+            return new SymbolDescription("", "", [], [], [], ex.Message);
         }
     }
 
@@ -295,8 +296,9 @@ public sealed class WendSharpTools(WorkspaceSession session)
     // AnalyzeMember — dependencies, data flow, callers (Task 2).
     // =========================================================================
     [McpServerTool(Name = "AnalyzeMember")]
-    [Description("Get what a method actually touches — internal vs external dependencies, the variables it reads/writes " +
-                 "(data flow), and its callers — computed by the compiler INSTEAD of traced by hand. Use before extracting " +
+    [Description("Get what a method actually touches — internal vs external dependencies, " +
+                 "the variables that flow in (candidate parameters) and out (candidate return values) plus any captured by closures, " +
+                 "and its callers — computed by the compiler INSTEAD of traced by hand. Use before extracting " +
                  "or splitting a method: the dependencies tell you what must move or become a parameter, and the callers " +
                  "tell you what will break. " +
                  "On failure, Error is set and other fields are empty/default — check Error first.")]
@@ -361,17 +363,20 @@ public sealed class WendSharpTools(WorkspaceSession session)
                     externalDeps.Add(sym);
             }
 
-            var readVars = new HashSet<string>(StringComparer.Ordinal);
-            var writtenVars = new HashSet<string>(StringComparer.Ordinal);
+            var flowsIn = new HashSet<string>(StringComparer.Ordinal);
+            var flowsOut = new HashSet<string>(StringComparer.Ordinal);
+            var captured = new HashSet<string>(StringComparer.Ordinal);
             foreach (var body in GetExecutableBodies(memberNode))
             {
                 var flow = model.AnalyzeDataFlow(body);
                 if (!flow.Succeeded)
                     continue;
-                foreach (var v in flow.ReadInside)
-                    readVars.Add(v.Name);
-                foreach (var v in flow.WrittenInside)
-                    writtenVars.Add(v.Name);
+                foreach (var v in flow.DataFlowsIn)
+                    flowsIn.Add(v.Name);
+                foreach (var v in flow.DataFlowsOut)
+                    flowsOut.Add(v.Name);
+                foreach (var v in flow.Captured)
+                    captured.Add(v.Name);
             }
 
             var callers = await CollectReferenceHitsAsync(memberSymbol, ct);
@@ -384,14 +389,15 @@ public sealed class WendSharpTools(WorkspaceSession session)
                 fullSpan.EndLinePosition.Line + 1,
                 [.. internalDeps.Select(DistinctName).Order()],
                 [.. externalDeps.Select(DistinctName).Order()],
-                [.. readVars.Order()],
-                [.. writtenVars.Order()],
+                [.. flowsIn.Order()],
+                [.. flowsOut.Order()],
+                [.. captured.Order()],
                 [.. callers]);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            return new MemberAnalysis("", "", 0, 0, [], [], [], [], [], ex.Message);
+            return new MemberAnalysis("", "", 0, 0, [], [], [], [], [], [], ex.Message);
         }
     }
 
@@ -696,14 +702,14 @@ public sealed class WendSharpTools(WorkspaceSession session)
                 if (remaining.TryGetValue(e.Key, out var left) && left > 0)
                     remaining[e.Key] = left - 1;
                 else
-                    conflicts.Add(new RenameConflict("Error", e.Id, e.Message, e.FilePath, e.Line, e.Column));
+                    conflicts.Add(new RenameConflict("Error", e.Id, e.Message, e.FilePath, e.Line, e.Column, e.Preview));
             }
         }
 
         return conflicts;
     }
 
-    readonly record struct ErrorEntry(string Id, string Message, string FilePath, int Line, int Column)
+    readonly record struct ErrorEntry(string Id, string Message, string FilePath, int Line, int Column, string Preview)
     {
         public (string Id, string Message) Key => (Id, Message);
     }
@@ -723,7 +729,8 @@ public sealed class WendSharpTools(WorkspaceSession session)
                 result.Add(new ErrorEntry(
                     d.Id, d.GetMessage(),
                     d.Location.SourceTree?.FilePath ?? "",
-                    span.StartLinePosition.Line + 1, span.StartLinePosition.Character + 1));
+                    span.StartLinePosition.Line + 1, span.StartLinePosition.Character + 1,
+                    PreviewLine(d.Location, ct)));
             }
         }
         return result;
@@ -928,7 +935,8 @@ public sealed class WendSharpTools(WorkspaceSession session)
                     d.Location.SourceTree?.FilePath ?? "",
                     span.StartLinePosition.Line + 1,
                     span.StartLinePosition.Character + 1,
-                    d.Severity.ToString()));
+                    d.Severity.ToString(),
+                    PreviewLine(d.Location, ct)));
             }
 
             foreach (var d in compilerDiags)
@@ -1032,6 +1040,18 @@ public sealed class WendSharpTools(WorkspaceSession session)
         return (loc.SourceTree.FilePath ?? "", span.StartLinePosition.Line + 1);
     }
 
+    static string PreviewLine(Location location, CancellationToken ct)
+    {
+        var tree = location.SourceTree;
+        if (tree is null)
+            return "";
+        var text = tree.GetText(ct);
+        var lineIdx = location.GetLineSpan().StartLinePosition.Line;
+        return lineIdx >= 0 && lineIdx < text.Lines.Count
+            ? text.Lines[lineIdx].ToString().Trim()
+            : "";
+    }
+
     static List<string> BuildBaseTypes(INamedTypeSymbol type)
     {
         var result = new List<string>();
@@ -1040,6 +1060,69 @@ public sealed class WendSharpTools(WorkspaceSession session)
         foreach (var iface in type.AllInterfaces)
             result.Add(iface.ToDisplayString());
         return result;
+    }
+
+    static readonly SymbolDisplayFormat TypeHeaderNameFormat = new(
+        typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypes,
+        genericsOptions:
+            SymbolDisplayGenericsOptions.IncludeTypeParameters |
+            SymbolDisplayGenericsOptions.IncludeTypeConstraints |
+            SymbolDisplayGenericsOptions.IncludeVariance,
+        miscellaneousOptions:
+            SymbolDisplayMiscellaneousOptions.UseSpecialTypes |
+            SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier |
+            SymbolDisplayMiscellaneousOptions.EscapeKeywordIdentifiers);
+
+    static string BuildTypeHeader(INamedTypeSymbol t)
+    {
+        var parts = new List<string>(6);
+
+        var access = t.DeclaredAccessibility switch
+        {
+            Accessibility.Public => "public",
+            Accessibility.Internal => "internal",
+            Accessibility.Protected => "protected",
+            Accessibility.Private => "private",
+            Accessibility.ProtectedOrInternal => "protected internal",
+            Accessibility.ProtectedAndInternal => "private protected",
+            _ => null
+        };
+        if (access is not null)
+            parts.Add(access);
+
+        if (t.IsStatic)
+        {
+            parts.Add("static");
+        }
+        else
+        {
+            if (t.IsAbstract && t.TypeKind != TypeKind.Interface)
+                parts.Add("abstract");
+            if (t.IsSealed && t.TypeKind == TypeKind.Class)
+                parts.Add("sealed");
+        }
+
+        if (t.TypeKind == TypeKind.Struct)
+        {
+            if (t.IsReadOnly)
+                parts.Add("readonly");
+            if (t.IsRefLikeType)
+                parts.Add("ref");
+        }
+
+        parts.Add(t.TypeKind switch
+        {
+            TypeKind.Class => t.IsRecord ? "record" : "class",
+            TypeKind.Struct => t.IsRecord ? "record struct" : "struct",
+            TypeKind.Interface => "interface",
+            TypeKind.Enum => "enum",
+            TypeKind.Delegate => "delegate",
+            _ => t.TypeKind.ToString().ToLowerInvariant()
+        });
+
+        parts.Add(t.ToDisplayString(TypeHeaderNameFormat));
+
+        return string.Join(' ', parts);
     }
 
     async Task<INamedTypeSymbol> ResolveTypeAsync(
