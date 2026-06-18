@@ -13,8 +13,6 @@ public static class SymbolLookup
         if (type is not null)
             return type;
 
-        // Try "Namespace.Type.Member" dotted lookup before falling back to FindDeclarationsAsync,
-        // which only matches simple (unqualified) names and would find nothing for dotted input.
         var dotted = TryFindMembersByDottedName(compilation, name, sourceTreePaths);
         if (dotted is not null)
             return dotted.Count switch
@@ -61,8 +59,6 @@ public static class SymbolLookup
             (preferKind is null || meta.Kind == preferKind))
             return new SymbolResolution(meta, []);
 
-        // Try "Namespace.Type.Member" dotted lookup before falling back to FindDeclarationsAsync,
-        // which only matches simple (unqualified) names and would find nothing for dotted input.
         var dotted = TryFindMembersByDottedName(compilation, name, sourceTreePaths);
         if (dotted is not null)
         {
@@ -116,9 +112,6 @@ public static class SymbolLookup
         return await SymbolFinder.FindSymbolAtPositionAsync(model, position, workspace, ct);
     }
 
-    // Returns the members of the type named by the dotted prefix of `name` (e.g. "Ns.Type.Member").
-    // Returns null when `name` has no dot or the type prefix does not resolve via GetTypeByMetadataName,
-    // so callers can fall through to FindDeclarationsAsync for simple names.
     private static IReadOnlyList<ISymbol>? TryFindMembersByDottedName(
         Compilation compilation, string name, HashSet<string>? sourceTreePaths)
     {
