@@ -1,55 +1,81 @@
-# C#- and .NET-specific patterns wendsharp handles
+---
+name: wendsharp
+description: >
+  Semantic C# code analysis via Roslyn for the Zed editor. Use when working with C# source —
+  finding references, exploring types, planning renames, analysing members, or checking
+  diagnostics. Prefer these tools over grep or text search whenever the task involves symbols,
+  types, overrides, or cross-file/cross-project accuracy.
+compatibility: Zed editor with WendSharp MCP server running. Requires a loaded .sln file.
+---
 
-These are the cases where semantic resolution beats text search by the widest margin. When any of
-these is involved, prefer wendsharp — grep is most wrong exactly here.
+# WendSharp — semantic oracle for C# refactoring
 
-## Partial classes and partial methods
-A type split across files, or a partial method's defining/implementing halves, are **one logical
-symbol**. `FindReferences` and `PlanRename` treat them as one; grep sees disconnected fragments.
-`PlanRename` reports these as `PartialDeclaration` cascades so you rename every part together.
+WendSharp is **read-only**: it never writes to disk or modifies the solution. It returns
+compiler-verified information so you can make correct edits yourself.
 
-## Explicit interface implementations
-`void IFoo.Bar()` doesn't read like an ordinary `Bar(` to a text search. `GetImplementations` and
-`PlanRename` resolve them via the symbol graph; `PlanRename` tags them `ExplicitInterfaceImpl` in
-cascades. Renaming the interface member must carry the explicit implementation along — wendsharp shows
-you both.
+## When to use WendSharp vs standard tools
 
-## Records and positional members
-Record positional properties are compiler-synthesized but are real contract surface, so
-`DescribeSymbol` surfaces them. It deliberately skips the synthesized noise —
-`Equals`/`GetHashCode`/`ToString`/`Deconstruct`/`PrintMembers`/`EqualityContract` and the operators —
-so you see the usable contract, not the generated plumbing.
+| Task | Use |
+|------|-----|
+| Find all callers of a method | `FindReferences` |
+| Read a large unfamiliar file | `ExploreCode` (not read_file) |
+| Know exact type signatures / usings needed | `DescribeSymbol` |
+| Rename a symbol across files | `PlanRename` |
+| Understand what a method depends on | `AnalyzeMember` |
+| Check build errors after an edit | `Refresh` → `GetDiagnostics` |
+| Find all types that implement an interface | `GetImplementations` |
+| Find all overrides of a virtual member | `GetOverrides` |
+| Don't know the project name | `GetWorkspaceInfo` first |
 
-## C# 14 extension members
-A `extension(T receiver) { ... }` block lives in a synthesized container type whose own members are
-the real extension methods. `DescribeSymbol` flattens these so they appear as part of the type's
-usable surface. Don't be surprised that the extension methods show up under the static class — that's
-intentional and correct.
+Use standard read_file/grep only for non-C# files or when WendSharp is unavailable.
 
-## Generic type arguments and arrays in `using` resolution
-`DescribeSymbol`'s `RequiredUsings` walks **into** `Task<Customer>`, `Dictionary<K,V>`, `Customer[]`,
-`Nullable<T>`, tuples, etc., collecting the namespace of every type argument and element type — not
-just the outer type. So the `using` set you copy is complete, not just the surface type's namespace.
+## Decision router — which tool, in what order
 
-## Method overloads
-Within a type, the same name with different parameters means you must disambiguate. Tools that can't
-auto-pick (`AnalyzeMember`, `GetOverrides`) return the exact `parameterTypes` strings to choose from —
-copy one back verbatim (comma-separated types, e.g. `"int, string"`; empty string for the
-parameterless overload). `PlanRename` has `renameOverloads` to rename all overloads as a set.
+**Orienting in unfamiliar code:**
+`GetWorkspaceInfo` → `ExploreCode` → `DescribeSymbol` / `AnalyzeMember`
 
-## Virtual / abstract / override chains
-Changing one link without the others is a classic break that compiles to a confusing error later.
-`GetOverrides` gives you the entire chain (not just direct subclasses) before you touch the
-signature, so you update every override together. For interface members, `GetImplementations` is the
-parallel tool.
+**Before any rename:**
+`PlanRename` → inspect `HasConflicts` → apply edits last-offset-first → `Refresh` → `GetDiagnostics`
 
-## Cross-project references
-Roslyn resolves symbols across the whole loaded solution, so `FindReferences`,
-`GetImplementations`, and `PlanRename` see uses in **other projects**, which a per-file or per-project
-text search misses. This is why `PlanRename`'s edit list can span projects — apply all of them, then
-`Refresh` every touched file.
+**Before changing a method/interface signature:**
+`FindReferences` + `GetOverrides` (if virtual) + `GetImplementations` (if interface) → edit all sites → `Refresh` → `GetDiagnostics`
 
-## Nullable reference types and resolved signatures
-`DescribeSymbol`/`AnalyzeMember` use a display format that includes nullable annotations and fully
-qualified types (never `var`). When you author code against a type, the signatures you copy carry the
-correct nullability — don't strip the `?`/non-`?` distinction.
+**Before extracting or splitting a method:**
+`ExploreCode` → `AnalyzeMember` → perform extraction → `Refresh` → `GetDiagnostics`
+
+**Writing new code against an existing type:**
+`DescribeSymbol` → copy `RequiredUsings` and member signatures verbatim → `Refresh` → `GetDiagnostics`
+
+**After every edit, always:**
+`Refresh(all changed/created/deleted paths)` → `GetDiagnostics` → fix → repeat until clean
+
+## Gotchas
+
+- **`Refresh` before anything else after an edit.** WendSharp is blind to disk changes until you
+  refresh. Stale results are the most common source of wrong answers.
+- **Apply `PlanRename` edits last-offset-first per file.** Each edit's `StartOffset` indexes the
+  original file. Applying front-to-back shifts all later offsets and corrupts the file.
+- **`HasConflicts: true` means stop.** Do not apply the rename. Report the collision and pick a
+  different name.
+- **`Ambiguous` is an instruction, not an error.** Re-call with the fully-qualified metadata name
+  (e.g. `MyApp.Services.OrderService.Calculate`).
+- **Pass every affected path to `Refresh`.** New files, deleted files, and modified files all need
+  to be listed. Check `Unmapped[]` in the response — a path there means the file wasn't found in
+  the solution.
+- **Never guess `projectName`.** Call `GetWorkspaceInfo` to get the exact names.
+- **`ExploreCode` needs an absolute path when possible.** Bare file names can be ambiguous if the
+  same name exists in multiple projects.
+
+## Reference files
+
+Load these only when you need them — not up front:
+
+- [`references/tools.md`](references/tools.md) — full parameter and return-value reference for
+  every tool. Read when you need exact field names or flag behaviour.
+- [`references/workflows.md`](references/workflows.md) — step-by-step playbooks for common
+  refactoring tasks. Read when you're about to start a multi-step operation.
+- [`references/csharp.md`](references/csharp.md) — C#-specific patterns where semantic resolution
+  beats text search the most (partial classes, records, explicit interface implementations, etc.).
+  Read when the task involves these language features.
+- [`references/pitfalls.md`](references/pitfalls.md) — symptom → cause → fix for the failures
+  that actually happen. Read when something goes wrong or the result looks unexpected.
