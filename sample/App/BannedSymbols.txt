@@ -1,1 +1,2 @@
 M:System.GC.Collect;Spec: manual GC is banned in fixtures
+P:System.DateTime.Now;Spec: timestamps must use DateTime.UtcNow

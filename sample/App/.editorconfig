@@ -1,0 +1,5 @@
+[*.cs]
+dotnet_diagnostic.RS0030.severity = error
+
+[BannedApiFixture.cs]
+dotnet_diagnostic.RS0030.severity = warning
