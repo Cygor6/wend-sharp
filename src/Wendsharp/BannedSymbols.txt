@@ -1,0 +1,23 @@
+T:System.IO.StreamWriter;WendSharp is a read-only oracle — no disk writes
+T:System.IO.BinaryWriter;WendSharp is a read-only oracle — no disk writes
+T:System.IO.FileStream;read-only oracle — use File.OpenRead/ReadAllText for reads
+M:System.IO.File.WriteAllText(System.String,System.String);read-only oracle
+M:System.IO.File.WriteAllText(System.String,System.String,System.Text.Encoding);read-only oracle
+M:System.IO.File.WriteAllTextAsync(System.String,System.String,System.Threading.CancellationToken);read-only oracle
+M:System.IO.File.WriteAllLines(System.String,System.Collections.Generic.IEnumerable{System.String});read-only oracle
+M:System.IO.File.WriteAllLines(System.String,System.String[]);read-only oracle
+M:System.IO.File.WriteAllBytes(System.String,System.Byte[]);read-only oracle
+M:System.IO.File.WriteAllBytesAsync(System.String,System.Byte[],System.Threading.CancellationToken);read-only oracle
+M:System.IO.File.AppendAllText(System.String,System.String);read-only oracle
+M:System.IO.File.AppendAllLines(System.String,System.Collections.Generic.IEnumerable{System.String});read-only oracle
+M:System.IO.File.Create(System.String);read-only oracle
+M:System.IO.File.Delete(System.String);read-only oracle
+M:System.IO.File.Move(System.String,System.String);read-only oracle
+M:System.IO.File.Move(System.String,System.String,System.Boolean);read-only oracle
+M:System.IO.File.Copy(System.String,System.String);read-only oracle
+M:System.IO.File.Copy(System.String,System.String,System.Boolean);read-only oracle
+M:System.IO.Directory.CreateDirectory(System.String);read-only oracle
+M:System.IO.Directory.Delete(System.String);read-only oracle
+M:System.IO.Directory.Delete(System.String,System.Boolean);read-only oracle
+M:System.IO.Directory.Move(System.String,System.String);read-only oracle
+M:Microsoft.CodeAnalysis.Workspace.TryApplyChanges(Microsoft.CodeAnalysis.Solution);the Zed agent applies edits — WendSharp never mutates the Solution

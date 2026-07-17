@@ -1,8 +1,10 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Wendsharp/WendSharp.csproj" />
+    <Project Path="src/WendSharp.Analyzers/WendSharp.Analyzers.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Wendsharp.Tests/WendSharp.Tests.csproj" />
+    <Project Path="tests/WendSharp.Analyzers.Tests/WendSharp.Analyzers.Tests.csproj" />
   </Folder>
 </Solution>

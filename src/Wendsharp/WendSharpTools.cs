@@ -1,7 +1,9 @@
-﻿using System.ComponentModel;
+﻿using System.Collections.Immutable;
+using System.ComponentModel;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.Rename;
 using ModelContextProtocol.Server;
@@ -907,13 +909,19 @@ public sealed class WendSharpTools(WorkspaceSession session)
     // GetDiagnostics — compiler errors/warnings.
     // =========================================================================
     [McpServerTool(Name = "GetDiagnostics")]
-    [Description("Report Roslyn compiler errors (and optionally warnings) for a project's current in-memory state — the truth " +
-                 "check after you edit. WendSharp only sees edits you have Refreshed, so call Refresh first or the results are stale. " +
+    [Description("Report Roslyn diagnostics — compiler errors (and optionally warnings) PLUS the project's analyzer diagnostics " +
+                 "(code-style, custom spec analyzers, banned-API rules) — for a project's current in-memory state, the truth " +
+                 "check after you edit. Analyzer diagnostics respect .editorconfig severity and are included by default; set " +
+                 "includeAnalyzers false to skip that slower pass when you only need compiler errors fast. " +
+                 "WendSharp only sees edits you have Refreshed, so call Refresh first or the results are stale. " +
                  "Pass filePaths to limit results to specific files (e.g. the ones you just edited); omit for the whole project. " +
                  "On failure, Error is set and Diagnostics is empty — check Error first.")]
     public async Task<DiagnosticsResult> GetDiagnostics(
         [Description("Project name, e.g. 'App'.")] string projectName,
         [Description("Include warnings in addition to errors.")] bool includeWarnings = false,
+        [Description("Also run the project's Roslyn analyzers (code-style, custom spec analyzers, banned-API rules). " +
+                     "Analyzer diagnostics respect .editorconfig severity. This pass is slower than the compiler check; " +
+                     "set false when you only need compiler errors fast.")] bool includeAnalyzers = true,
         [Description("Limit diagnostics to these absolute file paths (e.g. the files you just edited). Omit for the whole project.")] string[]? filePaths = null,
         CancellationToken ct = default)
     {
@@ -969,6 +977,31 @@ public sealed class WendSharpTools(WorkspaceSession session)
                 if (d.Severity == DiagnosticSeverity.Error
                     || (includeWarnings && d.Severity == DiagnosticSeverity.Warning))
                     Append(d);
+            }
+
+            if (includeAnalyzers)
+            {
+                var analyzers = project.AnalyzerReferences
+                    .SelectMany(r => r.GetAnalyzers(LanguageNames.CSharp))
+                    .ToImmutableArray();
+
+                if (!analyzers.IsEmpty)
+                {
+                    var cwa = compilation.WithAnalyzers(analyzers,
+                        new CompilationWithAnalyzersOptions(
+                            project.AnalyzerOptions,
+                            onAnalyzerException: null,
+                            concurrentAnalysis: true,
+                            logAnalyzerExecutionTime: false));
+
+                    var analyzerDiags = await cwa.GetAnalyzerDiagnosticsAsync(ct);
+                    foreach (var d in analyzerDiags)
+                    {
+                        if (d.Severity == DiagnosticSeverity.Error
+                            || (includeWarnings && d.Severity == DiagnosticSeverity.Warning))
+                            Append(d);
+                    }
+                }
             }
 
             return new DiagnosticsResult(projectName, errorCount, [.. results]);

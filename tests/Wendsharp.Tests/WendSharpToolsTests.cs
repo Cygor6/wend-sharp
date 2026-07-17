@@ -275,6 +275,45 @@ public class WendSharpToolsTests
         await Assert.That(result.ErrorCount).IsEqualTo(0);
     }
 
+    static readonly string BannedApiFixturePath = Path.Combine(SampleAppPath, "BannedApiFixture.cs");
+
+    [Test]
+    public async Task GetDiagnostics_IncludeAnalyzers_SurfacesBannedApiWarning()
+    {
+        var tools = await CreateToolsAsync();
+        var result = await tools.GetDiagnostics("App", includeWarnings: true, ct: CancellationToken.None);
+
+        var rs0030 = result.Diagnostics.Where(d => d.Code == "RS0030").ToArray();
+        await Assert.That(rs0030.Length).IsGreaterThan(0);
+        await Assert.That(rs0030.All(d => d.Severity == "Warning")).IsTrue();
+        await Assert.That(rs0030.All(d => d.FilePath.Contains("BannedApiFixture.cs"))).IsTrue();
+    }
+
+    [Test]
+    public async Task GetDiagnostics_IncludeAnalyzersFalse_OmitsAnalyzerDiagnostics()
+    {
+        var tools = await CreateToolsAsync();
+        var result = await tools.GetDiagnostics(
+            "App", includeWarnings: true, includeAnalyzers: false, ct: CancellationToken.None);
+
+        await Assert.That(result.Diagnostics.Any(d => d.Code == "RS0030")).IsFalse();
+    }
+
+    [Test]
+    public async Task GetDiagnostics_FilePaths_FiltersAnalyzerDiagnostics()
+    {
+        var tools = await CreateToolsAsync();
+
+        var included = await tools.GetDiagnostics(
+            "App", includeWarnings: true, filePaths: [BannedApiFixturePath], ct: CancellationToken.None);
+        await Assert.That(included.Diagnostics.Any(d => d.Code == "RS0030")).IsTrue();
+
+        var otherFile = Path.Combine(SampleAppPath, "Calculator.cs");
+        var excluded = await tools.GetDiagnostics(
+            "App", includeWarnings: true, filePaths: [otherFile], ct: CancellationToken.None);
+        await Assert.That(excluded.Diagnostics.Any(d => d.Code == "RS0030")).IsFalse();
+    }
+
     [Test, NotInParallel]
     public async Task DescribeSymbol_SeesFileAddedViaRefresh_CacheInvalidated()
     {

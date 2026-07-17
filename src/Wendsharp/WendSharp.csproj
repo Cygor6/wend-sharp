@@ -22,6 +22,19 @@
     <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.MSBuild" Version="5.6.0" />
   </ItemGroup>
 
+  <!-- Read-only invariant (Part A): ban disk-write and Solution-mutation APIs; escalated to error in .editorconfig. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="3.3.4" PrivateAssets="all" />
+    <AdditionalFiles Include="BannedSymbols.txt" />
+  </ItemGroup>
+
+  <!-- WS0001 spec analyzer (Part B): the MCP tool error contract. -->
+  <ItemGroup>
+    <ProjectReference Include="..\WendSharp.Analyzers\WendSharp.Analyzers.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
   <PropertyGroup Condition="'$(PublishReadyToRun)' == 'true'">
     <TieredCompilation>true</TieredCompilation>
     <TieredPGO>true</TieredPGO>
