@@ -3,6 +3,13 @@
 Every workflow ends in the same verification loop:
 `Refresh(changed + new + deleted) → GetDiagnostics → fix → repeat until clean`
 
+`GetDiagnostics` returns compiler errors **and** analyzer/spec diagnostics (banned APIs,
+project-specific rules, etc.). Both are blocking: a task is not done until `errorCount == 0`.
+
+Projects may encode specifications as Roslyn analyzers escalated to Error via `.editorconfig`.
+The diagnostic message states the rule and usually the fix (banned-symbol messages carry the
+replacement API) — follow it in the code being edited.
+
 If you don't know the project name, call `GetWorkspaceInfo` before starting any workflow.
 
 ---

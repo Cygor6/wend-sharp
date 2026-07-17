@@ -127,13 +127,23 @@ you call this.
 
 ## GetDiagnostics — your truth check
 
-Compiler errors (and optionally warnings) for the project's current in-memory state. Only
-current if you `Refresh`ed first.
+Compiler and analyzer diagnostics for the project's current in-memory state. Only current if
+you `Refresh`ed first. Analyzers (code-style, custom spec rules, banned APIs) run by default
+and respect `.editorconfig` severity.
 
-- `includeWarnings`: also return warnings.
-- `filePaths`: scope to specific files (e.g. the ones you just edited).
-- Returns `ErrorCount` (for the filtered set) and `Diagnostics[]` (code, message, file, line,
-  column, severity).
+Parameters (after `projectName`):
+
+- `includeWarnings` (bool, default `false`): also return warnings.
+- `includeAnalyzers` (bool, default `true`): run the project's Roslyn analyzers. Analyzer
+  diagnostics use the same severity gate (errors always; warnings only with `includeWarnings`)
+  and the same `filePaths` filter as compiler diagnostics. Set `false` only for a fast
+  compiler-only check mid-edit when the analyzer pass is measurably slow; leave `true` for
+  final verification of any task.
+- `filePaths` (`string[]?`, omit for whole project): scope to specific absolute paths
+  (e.g. the files you just edited).
+
+Returns `ErrorCount` (for the filtered set) and `Diagnostics[]` (code, message, file, line,
+column, severity).
 
 ## GetWorkspaceInfo — orient
 

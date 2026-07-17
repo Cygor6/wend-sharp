@@ -22,7 +22,7 @@ compiler-verified information so you can make correct edits yourself.
 | Know exact type signatures / usings needed | `DescribeSymbol` |
 | Rename a symbol across files | `PlanRename` |
 | Understand what a method depends on | `AnalyzeMember` |
-| Check build errors after an edit | `Refresh` → `GetDiagnostics` |
+| Check compiler/analyzer errors after an edit | `Refresh` → `GetDiagnostics` |
 | Find all types that implement an interface | `GetImplementations` |
 | Find all overrides of a virtual member | `GetOverrides` |
 | Don't know the project name | `GetWorkspaceInfo` first |
@@ -48,6 +48,7 @@ Use standard read_file/grep only for non-C# files or when WendSharp is unavailab
 
 **After every edit, always:**
 `Refresh(all changed/created/deleted paths)` → `GetDiagnostics` → fix → repeat until clean
+(`GetDiagnostics` includes analyzer/spec errors by default — same blocking bar as compiler errors.)
 
 ## Gotchas
 

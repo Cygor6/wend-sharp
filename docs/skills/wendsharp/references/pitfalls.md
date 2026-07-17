@@ -111,3 +111,29 @@ analysis only walks the executable bodies returned by `GetExecutableBodies`. Dep
 (the descendant-node walk) still capture symbols referenced in the initializer.
 **Fix:** Treat the `Dependencies` arrays as authoritative for "what does this member touch";
 data flow covers only the block/expression body.
+
+---
+
+## Silencing analyzer/spec errors by editing the spec
+
+**Symptom:** An analyzer diagnostic (banned API, project rule, code-style escalated to error)
+blocks the task; the agent "fixes" it by changing `.editorconfig`, `BannedSymbols.txt`, a
+ruleset, or an analyzer project — or by `#pragma warning disable` / `SuppressMessage` /
+severity downgrades.
+**Cause:** Treating a specification as an obstacle instead of a requirement.
+**Fix (hard rule):** Analyzer errors are specifications, not obstacles. Never edit
+`.editorconfig`, `BannedSymbols.txt`, ruleset files, or analyzer projects to make a diagnostic
+go away — that is deleting the spec, not satisfying it. The fix always goes in the code the
+diagnostic points at. If a rule seems genuinely wrong for the task, stop and ask the user; do
+not suppress it (`#pragma warning disable`, `SuppressMessage`, severity downgrades) on your
+own initiative.
+
+---
+
+## Expected analyzer warning missing from GetDiagnostics
+
+**Symptom:** An analyzer warning "isn't showing up" after `Refresh` → `GetDiagnostics`.
+**Cause:** With default flags only Error-severity diagnostics are returned (`includeWarnings`
+defaults to `false`).
+**Fix:** Pass `includeWarnings: true`. Do not treat absence under default flags as a tooling
+bug.
