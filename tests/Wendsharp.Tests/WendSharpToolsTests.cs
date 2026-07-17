@@ -1,5 +1,4 @@
-﻿using Microsoft.Build.Locator;
-using Microsoft.CodeAnalysis;
+﻿using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -7,12 +6,6 @@ namespace WendSharp.Tests;
 
 public class WendSharpToolsTests
 {
-    static WendSharpToolsTests()
-    {
-        if (!MSBuildLocator.IsRegistered)
-            MSBuildLocator.RegisterDefaults();
-    }
-
     static readonly string RepoRoot = FindRepoRoot();
     static readonly string SampleSolutionPath = Path.Combine(RepoRoot, "sample", "Sample.slnx");
     static readonly string SampleAppPath = Path.Combine(RepoRoot, "sample", "App");
@@ -40,7 +33,7 @@ public class WendSharpToolsTests
     public async Task FindReferences_Add_ReturnsExactlyTwoReferences()
     {
         var tools = await CreateToolsAsync();
-        var result = await tools.FindReferences("App", "Add", CancellationToken.None);
+        var result = await tools.FindReferences("App", "Add", ct: CancellationToken.None);
 
         await Assert.That(result.Total).IsEqualTo(2);
         await Assert.That(result.Symbol).IsEqualTo("SampleApp.Calculator.Add(int, int)");
@@ -245,6 +238,44 @@ public class WendSharpToolsTests
     }
 
     [Test, NotInParallel]
+    public async Task GetDiagnostics_FilePaths_NormalizedSeparatorsStillMatch()
+    {
+        try
+        {
+            var tools = await CreateToolsAsync();
+
+            await File.WriteAllTextAsync(ProgramPath,
+                "namespace SampleApp;\npublic static class Program\n{\n    public static void Main() { BrokenSyntax }\n}\n",
+                CancellationToken.None);
+            await tools.Refresh([ProgramPath], CancellationToken.None);
+
+            // Forward-slash variant of the Program path must still match on Windows.
+            var fwdSlash = ProgramPath.Replace('\\', '/');
+            var filtered = await tools.GetDiagnostics(
+                "App", filePaths: [fwdSlash], ct: CancellationToken.None);
+            await Assert.That(filtered.ErrorCount).IsGreaterThan(0);
+        }
+        finally
+        {
+            await File.WriteAllTextAsync(ProgramPath, KnownGoodProgram, CancellationToken.None);
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task GetDiagnostics_FilePaths_NoMatch_ReturnsErrorNotZero()
+    {
+        var tools = await CreateToolsAsync();
+
+        var bogus = Path.Combine(SampleAppPath, "DoesNotExist.cs");
+        var result = await tools.GetDiagnostics(
+            "App", filePaths: [bogus], ct: CancellationToken.None);
+
+        await Assert.That(result.Error).IsNotNull();
+        await Assert.That(result.Error).Contains("match a document");
+        await Assert.That(result.ErrorCount).IsEqualTo(0);
+    }
+
+    [Test, NotInParallel]
     public async Task DescribeSymbol_SeesFileAddedViaRefresh_CacheInvalidated()
     {
         var newPath = Path.Combine(SampleAppPath, "_CacheProbeTemp.cs");
@@ -309,7 +340,7 @@ public class WendSharpToolsTests
     {
 
         var source =
-"""
+    """
 using System;
 int x = GetArg("--n");
 Console.WriteLine(x);
@@ -328,6 +359,39 @@ static int GetArg(string name)
 
         await Assert.That(blueprint.Contains("secret + name.Length")).IsFalse();
         await Assert.That(blueprint.Contains("var secret = 42")).IsFalse();
+    }
+
+    [Test]
+    public async Task ExploreCode_MemberKindFixture_StripsAllBodies()
+    {
+        var tools = await CreateToolsAsync();
+        var fixturePath = Path.Combine(SampleAppPath, "MemberKindFixture.cs");
+        var result = await tools.ExploreCode(fixturePath, CancellationToken.None);
+
+        await Assert.That(result.Error).IsNull();
+        var bp = result.Blueprint;
+
+        // All member names survive.
+        await Assert.That(bp).Contains("BodiedProperty");
+        await Assert.That(bp).Contains("ExpressionBodiedProperty");
+        await Assert.That(bp).Contains("InitializedProperty");
+        await Assert.That(bp).Contains("operator +");
+        await Assert.That(bp).Contains("implicit operator int");
+        await Assert.That(bp.Contains("~MemberKindFixture")).IsTrue();
+
+        // No bodies of any kind survive.
+        await Assert.That(bp.Contains("=> Compute()")).IsFalse();
+        await Assert.That(bp.Contains("=> _field * 2")).IsFalse();
+        await Assert.That(bp.Contains("return _field;")).IsFalse();
+        await Assert.That(bp.Contains("_field = value;")).IsFalse();
+        await Assert.That(bp.Contains("= 5")).IsFalse();
+        await Assert.That(bp.Contains("=> a._field + b._field")).IsFalse();
+        await Assert.That(bp.Contains("=> f._field")).IsFalse();
+        await Assert.That(bp.Contains("=> key.Length")).IsFalse();
+        await Assert.That(bp.Contains("_field = 0")).IsFalse();
+
+        // Expression-bodied property/indexer collapse to { get; }.
+        await Assert.That(bp).Contains("{ get; }");
     }
 
     [Test]
@@ -646,6 +710,112 @@ static int GetArg(string name)
     }
 
     [Test]
+    public async Task AnalyzeMember_Indexer_ReportsAccessorDataFlow()
+    {
+        var tools = await CreateToolsAsync();
+
+        var analysis = await tools.AnalyzeMember(
+            "App", "SampleApp.MemberKindFixture", "this[]", ct: CancellationToken.None);
+
+        await Assert.That(analysis.Error).IsNull();
+        await Assert.That(analysis.DataFlowsIn.Length).IsGreaterThan(0);
+        await Assert.That(analysis.DataFlowsIn.Contains("value")).IsTrue();
+        await Assert.That(analysis.InternalDependencies.Any(d => d.Contains("_field"))).IsTrue();
+    }
+
+    [Test]
+    public async Task AnalyzeMember_Operator_ReportsDataFlow()
+    {
+        var tools = await CreateToolsAsync();
+
+        var analysis = await tools.AnalyzeMember(
+            "App", "SampleApp.MemberKindFixture", "op_Addition", ct: CancellationToken.None);
+
+        await Assert.That(analysis.Error).IsNull();
+        await Assert.That(analysis.DataFlowsIn.Length).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task FindReferences_OverloadedMember_NoParameterTypes_ReturnsActionableGuidance()
+    {
+        var tools = await CreateToolsAsync();
+
+        var result = await tools.FindReferences("App", "Calculate", ct: CancellationToken.None);
+
+        // Overload ambiguity lands in Error with the valid parameterTypes options (acceptable per design).
+        await Assert.That(result.Error).IsNotNull();
+        await Assert.That(result.Error).Contains("parameterTypes");
+        await Assert.That(result.Error).Contains("\"int\"");
+        await Assert.That(result.Error).Contains("\"string\"");
+    }
+
+    [Test]
+    public async Task FindReferences_OverloadedMember_ParameterTypes_ResolvesOneOverload()
+    {
+        var tools = await CreateToolsAsync();
+
+        var result = await tools.FindReferences("App", "Calculate", "string", CancellationToken.None);
+
+        await Assert.That(result.Kind).IsEqualTo("Method");
+        await Assert.That(result.Symbol).Contains("Calculate(string");
+    }
+
+    [Test]
+    public async Task GetOverrides_OverloadedMember_NoParameterTypes_ReturnsAmbiguousWithParameterTypes()
+    {
+        var tools = await CreateToolsAsync();
+
+        var result = await tools.GetOverrides("App", "SampleApp.OverloadableBase", "Compute", ct: CancellationToken.None);
+
+        await Assert.That(result.Kind).IsEqualTo("Ambiguous");
+        await Assert.That(result.Error).Contains("parameterTypes");
+        await Assert.That(result.Error).DoesNotContain("fully-qualified name");
+    }
+
+    [Test]
+    public async Task GetOverrides_OverloadedMember_ParameterTypes_ResolvesOneOverload()
+    {
+        var tools = await CreateToolsAsync();
+
+        var result = await tools.GetOverrides(
+            "App", "SampleApp.OverloadableBase", "Compute", "int", CancellationToken.None);
+
+        await Assert.That(result.Kind).IsNotEqualTo("Ambiguous");
+        await Assert.That(result.Total).IsGreaterThan(0);
+    }
+
+    [Test, NotInParallel]
+    public async Task ExploreCode_AmbiguousBareName_ReturnsErrorListingMatches()
+    {
+        var subDir = Path.Combine(SampleAppPath, "_AmbiguityProbe");
+        var subPath = Path.Combine(subDir, "Calculator.cs");
+        try
+        {
+            var tools = await CreateToolsAsync();
+
+            Directory.CreateDirectory(subDir);
+            await File.WriteAllTextAsync(subPath,
+                "namespace SampleApp.Probe;\npublic static class Calculator { public static int Ping() => 1; }\n",
+                CancellationToken.None);
+            await tools.Refresh([subPath], CancellationToken.None);
+
+            // Now two documents are named Calculator.cs — bare name must not silently pick one.
+            var result = await tools.ExploreCode("Calculator.cs", CancellationToken.None);
+
+            await Assert.That(result.Error).IsNotNull();
+            await Assert.That(result.Error).Contains("ambiguous");
+            await Assert.That(result.Blueprint).IsEmpty();
+        }
+        finally
+        {
+            if (File.Exists(subPath))
+                File.Delete(subPath);
+            if (Directory.Exists(subDir))
+                Directory.Delete(subDir, recursive: true);
+        }
+    }
+
+    [Test]
     public async Task DescribeSymbol_RecordStruct_ShowsPrimaryConstructorAndPositionalProperties()
     {
         var tools = await CreateToolsAsync();
@@ -851,12 +1021,12 @@ static int GetArg(string name)
 
         await Assert.That(desc.Members.Any(m => m.Kind == "NamedType")).IsFalse();
 
-        var isContainedBy = await tools.FindReferences("WendSharp", "IsContainedBy", CancellationToken.None);
+        var isContainedBy = await tools.FindReferences("WendSharp", "IsContainedBy", ct: CancellationToken.None);
         await Assert.That(isContainedBy.Kind).IsEqualTo("Method");
 
         await Assert.That(isContainedBy.Total).IsGreaterThan(0);
 
-        var toFullSig = await tools.FindReferences("WendSharp", "ToFullSignature", CancellationToken.None);
+        var toFullSig = await tools.FindReferences("WendSharp", "ToFullSignature", ct: CancellationToken.None);
         await Assert.That(toFullSig.Kind).IsEqualTo("Method");
 
         await Assert.That(toFullSig.Total).IsGreaterThan(0);

@@ -47,10 +47,15 @@ and exclude false hits in comments, strings, and unrelated identifiers.
 
 - Run before changing any call site or signature.
 - `symbolName`: metadata type name or simple member name.
-- `Kind == "Ambiguous"`: re-call with the fully-qualified metadata name.
+- **Overloads:** pass `parameterTypes` (comma-separated, e.g. `"int, string"`; empty
+  string for the parameterless overload) exactly as the guidance lists them. Omit only
+  for non-overloaded members.
+- `Kind == "Ambiguous"`: re-call with the fully-qualified metadata name; for method overloads
+  pass `parameterTypes`.
 - `Kind == "NotFound"`: nothing matched — check spelling or use `ExploreCode` to confirm the
   member exists.
-- `Kind == "Error"`: check `Error`.
+- `Kind == "Error"`: check `Error` — for an overloaded member it carries the valid
+  `parameterTypes` options.
 - Returns `Total` and `References[]` (file, line, column, preview, context).
 
 ## GetImplementations — the implementation surface
@@ -72,8 +77,11 @@ subclasses.
 
 - The other half of `FindReferences`: that finds call sites, this finds alternate
   implementations. Run **before** changing a virtual/abstract member's signature or contract.
+- **Overloads:** pass `parameterTypes` (comma-separated, e.g. `"int, string"`; empty string
+  for the parameterless overload) exactly as the ambiguity error lists them. Omit only for
+  non-overloaded members.
 - `Kind == "NotOverridable"`: the member isn't virtual/abstract/override — recheck the name.
-- `Kind == "Ambiguous"`: overloaded member — pass the containing type's full name.
+- `Kind == "Ambiguous"`: overloaded member — pass `parameterTypes` with one of the listed options.
 - Returns `Kind`, `Total`, `Overrides[]` (signature, file, line, column, context).
 
 ## PlanRename — never hand-rename across files
@@ -97,7 +105,10 @@ cascades. It does **not** apply anything itself.
     `InterfaceMember`, `ExplicitInterfaceImpl`, `Overload`, or `PartialDeclaration`.
   - `FileRenames[]` — `OldPath` → `NewPath` pairs when `renameFile` is set.
 - **Apply by absolute offset/length, last-offset-first per file.** Line/col are also provided
-  for line-based editors, but offsets are unambiguous.
+  for line-based editors, but offsets are unambiguous. `StartOffset`/`Length` are character
+  offsets as in .NET string indexing (UTF-16 code units), counted from the first character
+  after any BOM — **not** byte offsets. Apply edits with text/string APIs, or convert offsets
+  if writing bytes (e.g. on UTF-8 files with non-ASCII content).
 - If `FileRenames` is non-empty, rename those files on disk too, then `Refresh` with the new
   paths.
 - Refuses metadata/external symbols (no source in the workspace) — you can `DescribeSymbol`

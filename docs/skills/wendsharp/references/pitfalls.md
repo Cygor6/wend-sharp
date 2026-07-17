@@ -36,11 +36,12 @@ different name.
 
 ## Treating `Ambiguous` as a dead end
 
-**Symptom:** `FindReferences`/`GetOverrides`/`PlanRename` returns `Ambiguous` and you stop.
-**Cause:** A simple name matched several symbols.
+**Symptom:** `FindReferences`/`GetOverrides`/`PlanRename` returns `Ambiguous` (or `Error` for an
+overloaded method) and you stop.
+**Cause:** A simple name matched several symbols, or a method name matched several overloads.
 **Fix:** It's an instruction, not an error. Re-call with the **fully-qualified metadata name**
-(`Namespace.Type` or `Namespace.Type.Member`). For overloaded members in `AnalyzeMember`, pass
-the exact `parameterTypes` string the error lists.
+(`Namespace.Type` or `Namespace.Type.Member`). For overloaded members in `AnalyzeMember`,
+`FindReferences`, and `GetOverrides`, pass the exact `parameterTypes` string the message lists.
 
 ---
 
@@ -98,3 +99,15 @@ unless you specifically want textual replacement in comments or strings.
 source `Location` but empty `DeclaringSyntaxReferences` — accessing `[0]` throws.
 **Fix:** This is a known guard case in WendSharp. If you encounter it in an older build, update
 to the version that falls back to the containing type's display string for these members.
+
+---
+
+## Constructor initializer arguments excluded from data flow
+
+**Symptom:** `AnalyzeMember` on a constructor reports `DataFlowsIn`/`DataFlowsOut`/`Captured`
+that omit variables read in a `: base(...)` or `: this(...)` initializer.
+**Cause:** Constructor initializer arguments are not part of the constructor `Body`; data-flow
+analysis only walks the executable bodies returned by `GetExecutableBodies`. Dependencies
+(the descendant-node walk) still capture symbols referenced in the initializer.
+**Fix:** Treat the `Dependencies` arrays as authoritative for "what does this member touch";
+data flow covers only the block/expression body.

@@ -52,7 +52,7 @@ public readonly record struct RenameEdit(
     string FilePath,
     int StartLine, int StartColumn,   // 1-based, positions in the ORIGINAL file
     int EndLine, int EndColumn,       // 1-based, exclusive end
-    int StartOffset, int Length,      // absolute char offset + length in ORIGINAL file
+    int StartOffset, int Length,      // absolute char offset + length in ORIGINAL file (UTF-16 code units, after any BOM — NOT byte offsets)
     string OldText,
     string NewText,
     string Location,                  // Declaration | Reference | Nameof | Cref | Comment | String

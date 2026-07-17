@@ -264,24 +264,22 @@ public sealed class WorkspaceSession(ILogger<WorkspaceSession> logger, string? s
                      || f.EndsWith(".sln", StringComparison.OrdinalIgnoreCase))
             .ToArray();
 
-    FrozenDictionary<string, Project>? _projectIndex;
-    Solution? _projectIndexFor;
+    sealed record ProjectIndex(Solution Solution, FrozenDictionary<string, Project> ByName);
+    ProjectIndex? _projectIndex;   // replaces the two fields _projectIndex + _projectIndexFor
 
     public Project GetProject(string name)
     {
         var solution = Solution;
-        var index = _projectIndex;
-        if (index is null || !ReferenceEquals(_projectIndexFor, solution))
+        var cached = Volatile.Read(ref _projectIndex);
+        if (cached is null || !ReferenceEquals(cached.Solution, solution))
         {
-            index = solution.Projects
+            cached = new ProjectIndex(solution, solution.Projects
                 .GroupBy(p => p.Name, StringComparer.Ordinal)
-                .ToFrozenDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
-
-            _projectIndexFor = solution;
-            _projectIndex = index;
+                .ToFrozenDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal));
+            Volatile.Write(ref _projectIndex, cached);
         }
 
-        return index.TryGetValue(name, out var project)
+        return cached.ByName.TryGetValue(name, out var project)
             ? project
             : throw new ArgumentException(
                 $"Project '{name}' not found. Available: " +
@@ -297,8 +295,19 @@ public sealed class WorkspaceSession(ILogger<WorkspaceSession> logger, string? s
     {
         var solution = Solution;   // single consistent snapshot for the whole lookup
         var relativeTargets = ResolveRelativeTargets(fileNameOrPath);
-        return solution.Projects.SelectMany(p => p.Documents)
-            .FirstOrDefault(d => MatchesName(d.FilePath, fileNameOrPath, relativeTargets));
+        var matches = solution.Projects.SelectMany(p => p.Documents)
+            .Where(d => MatchesName(d.FilePath, fileNameOrPath, relativeTargets))
+            .Take(6)                                   // enough to report, bounded
+            .ToList();
+
+        return matches.Count switch
+        {
+            0 => null,
+            1 => matches[0],
+            _ => throw new ArgumentException(
+                $"'{fileNameOrPath}' is ambiguous — it matches {matches.Count}+ files: " +
+                $"{string.Join("; ", matches.Select(m => m.FilePath))}. Pass an absolute path.")
+        };
     }
 
     public async ValueTask<HashSet<string>> GetSourceTreePathsAsync(Project project, CancellationToken ct)

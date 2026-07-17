@@ -1,10 +1,7 @@
-﻿using Microsoft.Build.Locator;
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using WendSharp;
-
-MSBuildLocator.RegisterDefaults();
 
 var solutionPath = GetArg(args, "--solution")
                    ?? Environment.GetEnvironmentVariable("WendSharp_SOLUTION");

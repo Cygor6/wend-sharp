@@ -20,8 +20,47 @@ public sealed class StripBodyRewriter : CSharpSyntaxRewriter
             SyntaxFactory.SeparatedList(node.Declaration.Variables.Select(v =>
                 v.WithInitializer(null)))));
 
-    public override SyntaxNode? VisitPropertyDeclaration(PropertyDeclarationSyntax node) =>
-        node.WithInitializer(null);
+    public override SyntaxNode? VisitPropertyDeclaration(PropertyDeclarationSyntax node)
+    {
+        // base call is required: it visits the accessor children so VisitAccessorDeclaration strips their bodies.
+        var visited = (PropertyDeclarationSyntax)base.VisitPropertyDeclaration(node)!;
+
+        if (visited.ExpressionBody is not null)
+            visited = visited.WithExpressionBody(null).WithAccessorList(GetOnlyAccessorList());
+
+        if (visited.Initializer is not null)
+            visited = visited.WithInitializer(null);
+
+        // A property with an accessor list must not carry a trailing semicolon token.
+        if (visited.AccessorList is not null)
+            visited = visited.WithSemicolonToken(default);
+
+        return visited;
+    }
+
+    public override SyntaxNode? VisitIndexerDeclaration(IndexerDeclarationSyntax node)
+    {
+        var visited = (IndexerDeclarationSyntax)base.VisitIndexerDeclaration(node)!;
+        if (visited.ExpressionBody is not null)
+            visited = visited.WithExpressionBody(null)
+                             .WithAccessorList(GetOnlyAccessorList())
+                             .WithSemicolonToken(default);
+        return visited;
+    }
+
+    public override SyntaxNode? VisitOperatorDeclaration(OperatorDeclarationSyntax node) =>
+        node.WithBody(null).WithExpressionBody(null).WithSemicolonToken(Semi());
+
+    public override SyntaxNode? VisitConversionOperatorDeclaration(ConversionOperatorDeclarationSyntax node) =>
+        node.WithBody(null).WithExpressionBody(null).WithSemicolonToken(Semi());
+
+    public override SyntaxNode? VisitDestructorDeclaration(DestructorDeclarationSyntax node) =>
+        node.WithBody(null).WithExpressionBody(null).WithSemicolonToken(Semi());
+
+    static AccessorListSyntax GetOnlyAccessorList() =>
+        SyntaxFactory.AccessorList(SyntaxFactory.SingletonList(
+            SyntaxFactory.AccessorDeclaration(SyntaxKind.GetAccessorDeclaration)
+                .WithSemicolonToken(Semi())));
 
     public override SyntaxNode? VisitLocalFunctionStatement(LocalFunctionStatementSyntax node) =>
         node.WithBody(null).WithExpressionBody(null).WithSemicolonToken(Semi());

@@ -55,11 +55,13 @@ public sealed class WendSharpTools(WorkspaceSession session)
     [Description("Find every SEMANTIC reference to a type or member across the solution — use this INSTEAD of grep/text search. " +
                  "Roslyn resolves the real symbol, so results include overrides and interface implementations and exclude " +
                  "false hits in comments, strings, and unrelated same-named identifiers. Use before any rename or call-site update. " +
-                 "If the result is marked AMBIGUOUS, re-call with the fully-qualified metadata name. " +
+                 "If the result is marked AMBIGUOUS, re-call with the fully-qualified metadata name; for method overloads pass parameterTypes. " +
                  "On an unexpected failure (e.g. unknown project), Kind is \"Error\" and Error is set — check Error first.")]
     public async Task<FindReferencesResult> FindReferences(
         [Description("Project name that declares or can see the symbol, e.g. 'App'.")] string projectName,
         [Description("Symbol name: a metadata type name (e.g. 'SampleApp.Calculator') or a simple member name (e.g. 'Add').")] string symbolName,
+        [Description("For an overloaded method, the comma-separated parameter types of the overload " +
+                     "(e.g. \"int, string\"), exactly as listed in the ambiguity error; empty string for the parameterless overload.")] string? parameterTypes = null,
         CancellationToken ct = default)
     {
         try
@@ -70,19 +72,27 @@ public sealed class WendSharpTools(WorkspaceSession session)
                               ?? throw new InvalidOperationException($"No compilation for project '{projectName}'.");
 
             var sourceTreePaths = await session.GetSourceTreePathsAsync(project, ct);
-            var symbol = await SymbolLookup.FindByNameAsync(compilation, project, symbolName, sourceTreePaths, ct);
+            var resolution = await SymbolLookup.ResolveAsync(compilation, project, symbolName, preferKind: null, sourceTreePaths, ct);
+
+            var symbol = resolution.Symbol;
+            if (symbol is null && resolution.Ambiguous.Count > 1)
+            {
+                // All-methods ambiguity is an overload set — resolvable via parameterTypes.
+                if (resolution.Ambiguous.All(s => s.Kind == SymbolKind.Method))
+                {
+                    symbol = ResolveOverload(resolution.Ambiguous, symbolName, parameterTypes); // throws ArgumentException with the exact options
+                }
+                else
+                {
+                    var candidates = string.Join("; ", resolution.Ambiguous.Select(DescribeCandidate));
+                    return new FindReferencesResult(
+                        $"{symbolName} (AMBIGUOUS — matched {resolution.Ambiguous.Count} symbols: {candidates}. " +
+                        "Use the full metadata name to disambiguate; for method overloads pass parameterTypes.)",
+                        "Ambiguous", 0, []);
+                }
+            }
             if (symbol is null)
                 return new FindReferencesResult(symbolName, "NotFound", 0, []);
-
-            var ambiguous = await SymbolLookup.FindAmbiguousAsync(compilation, project, symbolName, sourceTreePaths, ct);
-            if (ambiguous is not null)
-            {
-                var candidates = string.Join("; ", ambiguous.Select(s => s.ToDisplayString()));
-                return new FindReferencesResult(
-                    $"{symbolName} (AMBIGUOUS — matched {ambiguous.Count} symbols: {candidates}. " +
-                    "Use the full metadata name to disambiguate.)",
-                    "Ambiguous", 0, []);
-            }
 
             var hits = await CollectReferenceHitsAsync(symbol, ct);
             return new FindReferencesResult(symbol.ToDisplayString(), symbol.Kind.ToString(), hits.Count, [.. hits]);
@@ -159,6 +169,8 @@ public sealed class WendSharpTools(WorkspaceSession session)
         [Description("Project name that declares the type, e.g. 'App'.")] string projectName,
         [Description("Type that declares the virtual/abstract member, e.g. 'PricingService'.")] string typeName,
         [Description("Member name, e.g. 'CalculateTotal'.")] string memberName,
+        [Description("For an overloaded method, the comma-separated parameter types of the overload " +
+                     "(e.g. \"int, string\"), exactly as listed in the ambiguity error; empty string for the parameterless overload.")] string? parameterTypes = null,
         CancellationToken ct = default)
     {
         try
@@ -183,10 +195,10 @@ public sealed class WendSharpTools(WorkspaceSession session)
             }
             else
             {
-                var sigs = string.Join("; ", candidates.Select(c => c.ToFullSignature()));
-                return new GetOverridesResult($"{typeName}.{memberName}", "Ambiguous", 0, [],
-                    $"Member '{memberName}' in '{typeName}' has {candidates.Count} overloads: {sigs}. " +
-                    "Use the containing type's fully-qualified name to disambiguate.");
+                try
+                { memberSymbol = ResolveOverload(candidates, memberName, parameterTypes); }
+                catch (ArgumentException ex)
+                { return new GetOverridesResult($"{typeName}.{memberName}", "Ambiguous", 0, [], ex.Message); }
             }
 
             if (!IsOverridable(memberSymbol))
@@ -415,6 +427,8 @@ public sealed class WendSharpTools(WorkspaceSession session)
                  "(name collisions, new compile errors) and cascades (overrides, interface members, partial declarations) that " +
                  "text search misses. If HasConflicts is true, do NOT apply — report the collision. Otherwise apply each edit by " +
                  "its absolute offset/length, then call Refresh and GetDiagnostics to confirm. " +
+                 "StartOffset/Length are character offsets as in .NET string indexing (UTF-16 code units), counted from the first " +
+                 "character after any BOM — NOT byte offsets. Apply edits with text/string APIs, or convert offsets if writing bytes. " +
                  "If FileRenames is non-empty, rename those files on disk (OldPath to NewPath) in addition to applying Edits, " +
                  "before calling Refresh.")]
     public async Task<PlanRenameResult> PlanRename(
@@ -910,9 +924,20 @@ public sealed class WendSharpTools(WorkspaceSession session)
             var compilation = await project.GetCompilationAsync(ct)
                               ?? throw new InvalidOperationException($"No compilation for project '{projectName}'.");
 
-            HashSet<string>? filter = filePaths is { Length: > 0 } pathArray
-                ? new HashSet<string>(pathArray, StringComparer.OrdinalIgnoreCase)
-                : null;
+            HashSet<string>? filter = null;
+            if (filePaths is { Length: > 0 } pathArray)
+            {
+                filter = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var p in pathArray)
+                    filter.Add(Path.GetFullPath(p));
+
+                var docPaths = await session.GetSourceTreePathsAsync(project, ct);
+                if (!docPaths.Any(dp => filter.Contains(Path.GetFullPath(dp))))
+                    return new DiagnosticsResult(projectName, 0, [],
+                        $"None of the {filter.Count} filePaths match a document in project '{projectName}'. " +
+                        "Diagnostics were NOT computed — check the paths (absolute, correct separators) or omit filePaths " +
+                        "for the whole project. If you just created the file, call Refresh first.");
+            }
 
             var compilerDiags = compilation.GetDiagnostics(ct);
             var results = new List<DiagnosticDto>(compilerDiags.Length);
@@ -923,7 +948,7 @@ public sealed class WendSharpTools(WorkspaceSession session)
                 if (filter is not null)
                 {
                     var p = d.Location.SourceTree?.FilePath;
-                    if (p is null || !filter.Contains(p))
+                    if (p is null || !filter.Contains(Path.GetFullPath(p)))
                         return;
                 }
                 if (d.Severity == DiagnosticSeverity.Error)
@@ -1167,6 +1192,9 @@ public sealed class WendSharpTools(WorkspaceSession session)
             ? string.Join(", ", m.Parameters.Select(p => p.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)))
             : "";
 
+    static string DescribeCandidate(ISymbol s) =>
+        s is IMethodSymbol ? $"{s.ToDisplayString()} (parameterTypes: \"{FormatParameterTypes(s)}\")" : s.ToDisplayString();
+
     static void CollectUsings(ISymbol member, HashSet<string> usingSet, HashSet<ITypeSymbol> visited)
     {
         void AddType(ITypeSymbol? t)
@@ -1254,6 +1282,32 @@ public sealed class WendSharpTools(WorkspaceSession session)
                             yield return eax;
                     }
                 }
+                break;
+            case IndexerDeclarationSyntax ix:
+                if (ix.ExpressionBody?.Expression is { } ixe)
+                    yield return ixe;
+                else if (ix.AccessorList is { } ixal)
+                {
+                    foreach (var accessor in ixal.Accessors)
+                    {
+                        if (accessor.Body is { } iab)
+                            yield return iab;
+                        else if (accessor.ExpressionBody?.Expression is { } iax)
+                            yield return iax;
+                    }
+                }
+                break;
+            case OperatorDeclarationSyntax op:
+                if (op.Body is { } opb)
+                    yield return opb;
+                else if (op.ExpressionBody?.Expression is { } ope)
+                    yield return ope;
+                break;
+            case ConversionOperatorDeclarationSyntax cv:
+                if (cv.Body is { } cvb)
+                    yield return cvb;
+                else if (cv.ExpressionBody?.Expression is { } cve)
+                    yield return cve;
                 break;
         }
     }

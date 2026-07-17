@@ -136,7 +136,7 @@ The loop:
 
 1. Call `PlanRename`.
 2. If `HasConflicts`, report the collision — do **not** apply.
-3. Otherwise apply each `RenameEdit` by absolute offset/length (verbatim spans).
+3. Otherwise apply each `RenameEdit` by absolute offset/length (verbatim spans). `StartOffset`/`Length` are character offsets as in .NET string indexing (UTF-16 code units), counted from the first character after any BOM — **not** byte offsets. Apply with text/string APIs, or convert offsets if writing bytes.
 4. Call `Refresh`, then `GetDiagnostics` — confirms the result and catches any application slip.
 
 wend-sharp never writes; the session `Solution` is byte-for-byte unchanged after every `PlanRename` call (the renamed solution is local and discarded).
