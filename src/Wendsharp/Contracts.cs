@@ -78,8 +78,23 @@ public readonly record struct FileRename(string OldPath, string NewPath);
 public readonly record struct SymbolHit(
     string Signature, string FilePath, int Line, int Column, string Context);
 
+/// <summary>Whether the compiler can prove a type's derived set is complete (C# 15 <c>closed</c>
+/// hierarchies and unions). For an ordinary open type everything is false/empty: any assembly may
+/// add a derived type, so the implementation list is what exists in this solution, not what can
+/// exist. <c>IsExhaustive</c> is also false for a closed generic with an unspeakable derived type.
+/// <c>DirectDerivedTypes</c> is direct, not transitive.</summary>
+public readonly record struct ClosedHierarchyInfo(
+    bool IsClosed,
+    bool IsUnion,
+    bool IsExhaustive,
+    string[] DirectDerivedTypes)
+{
+    public static ClosedHierarchyInfo Open => new(false, false, false, []);
+}
+
 public readonly record struct GetImplementationsResult(
-    string Symbol, string Kind, int Total, SymbolHit[] Implementations, string? Error = null);
+    string Symbol, string Kind, int Total, SymbolHit[] Implementations,
+    ClosedHierarchyInfo Closed, string? Error = null);
 
 public readonly record struct GetOverridesResult(
     string Symbol, string Kind, int Total, SymbolHit[] Overrides, string? Error = null);

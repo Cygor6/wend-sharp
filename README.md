@@ -29,7 +29,7 @@ resolved (never `var`).
 | `ExploreCode` | Compact blueprint of a file (signatures, no bodies). |
 | `DescribeSymbol` | A type's full public/protected surface with resolved types, base types, interfaces, and the `using` directives needed to author an interface against it. |
 | `FindReferences` | Semantic references to a type/member across the solution (no false text matches). |
-| `GetImplementations` | Every concrete type implementing an interface or deriving from a class, across multi-level inheritance and other files/projects (resolved via Roslyn's symbol graph). |
+| `GetImplementations` | Every concrete type implementing an interface or deriving from a class, across multi-level inheritance and other files/projects (resolved via Roslyn's symbol graph). `Closed.IsExhaustive` tells you whether that set is *provably* complete (a C# 15 `closed` hierarchy or union) or merely everything present in this solution. |
 | `GetOverrides` | Every override of a virtual/abstract member across the whole inheritance chain, not just direct subclasses. |
 | `AnalyzeMember` | A method's internal/external dependencies, data flow (read/written variables), and callers. Powers "extract logic". |
 | `PlanRename` | Computes a compiler-verified rename plan **without modifying code**: apply-ready edits (file + 1-based line/col + absolute offset/length + old/new text), conflicts (name collisions & new compile errors), and cascade targets (overrides, interface members, partial declarations) that text search misses. wend-sharp does NOT apply it — apply the edits yourself, then `Refresh` + `GetDiagnostics`. |
@@ -123,6 +123,19 @@ Then open the Agent Panel → Settings and confirm the green "Server is active" 
 in your prompt so the model picks its tools. Because these tools are read-only, you can safely
 auto-approve them per-tool (key form `mcp:wendsharp:<tool_name>`) or via
 `agent.tool_permissions.default`.
+
+You do not have to take that on trust. Every tool advertises the read-only invariant in its MCP
+tool annotations, so a client can verify it from `tools/list` rather than from this README:
+
+```json
+"annotations": {
+  "readOnlyHint": true, "destructiveHint": false,
+  "idempotentHint": true, "openWorldHint": false
+}
+```
+
+Tools also declare an `outputSchema` and return `structuredContent`, so results are machine-checkable
+instead of parsed out of prose. The plain text block is still sent alongside for older clients.
 
 ### Agent workflow: safe rename via `PlanRename`
 

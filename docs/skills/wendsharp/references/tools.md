@@ -68,7 +68,13 @@ inheritance, generic constraints, and other files/projects.
 - `Total: 0` unexpectedly? Confirm with `DescribeSymbol` that the type is actually an
   interface or has abstract members.
 - Returns `Kind` (type kind), `Total`, `Implementations[]` (signature, file, line, column,
-  context).
+  context), and `Closed`.
+- **`Closed.IsExhaustive` is the exhaustiveness proof.** `Implementations[]` is what exists in the
+  loaded solution; it is not a guarantee that nothing else can implement the type, because another
+  assembly may add one. For a C# 15 `closed` hierarchy or union the compiler knows the complete set,
+  and `Closed.IsExhaustive == true` means an edit covering every implementation is provably total.
+  For every ordinary open type it is `false` (with `IsClosed`/`IsUnion` false and
+  `DirectDerivedTypes` empty), which is the honest answer rather than a silent assumption.
 
 ## GetOverrides — the override chain
 

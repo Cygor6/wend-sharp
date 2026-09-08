@@ -21,6 +21,7 @@ obj/
 test-*
 smoke-*
 todo/
+TestResults/
 
 # Build output
 publish/

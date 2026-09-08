@@ -91,6 +91,11 @@ public sealed class WorkspaceSession(ILogger<WorkspaceSession> logger, string? s
             : Directory.GetCurrentDirectory();
     }
 
+    // Roots is deprecated (SEP-2577) but kept as the last-resort fallback: it still works with
+    // down-level clients, and the earlier steps of this chain (--solution, WendSharp_SOLUTION, the
+    // cwd anchor) are already what SEP-2577 recommends instead. Do not migrate to
+    // InputRequest.ForRootsList - that replacement is itself [Obsolete] in SDK 2.2.0.
+#pragma warning disable MCP9005
     public async ValueTask<IReadOnlyList<WorkspaceRoot>> GetClientRootsAsync(McpServer? server, CancellationToken ct)
     {
         if (server?.ClientCapabilities?.Roots is null)
@@ -117,6 +122,7 @@ public sealed class WorkspaceSession(ILogger<WorkspaceSession> logger, string? s
             return [];
         }
     }
+#pragma warning restore MCP9005
 
     static string? RootUriToDirectory(string uri)
     {

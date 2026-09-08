@@ -10,13 +10,20 @@ using ModelContextProtocol.Server;
 
 namespace WendSharp;
 
+// Every tool declares the read-only invariant in its annotations; without them clients fall back to
+// the MCP defaults, which are destructiveHint/openWorldHint true. destructiveHint and idempotentHint
+// are redundant under readOnlyHint per spec, but set anyway so a client that reads them without
+// checking readOnlyHint first does not get the permissive default. Refresh counts as read-only: it
+// updates only this server's in-memory Solution, never disk.
 [McpServerToolType]
 public sealed class WendSharpTools(WorkspaceSession session)
 {
     // =========================================================================
     // ExploreCode — compact blueprint of a file (signatures, no bodies).
     // =========================================================================
-    [McpServerTool(Name = "ExploreCode")]
+    [McpServerTool(Name = "ExploreCode", Title = "Explore code structure",
+                   ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false,
+                   UseStructuredContent = true)]
     [Description("Get a C# file's structure (namespaces, types, member signatures) with method bodies stripped, " +
                  "INSTEAD of reading the whole file. Use this first to map a large or unfamiliar file cheaply, " +
                  "then call DescribeSymbol or AnalyzeMember on the specific member you care about. " +
@@ -53,7 +60,9 @@ public sealed class WendSharpTools(WorkspaceSession session)
     // =========================================================================
     // FindReferences — semantic references across the whole solution.
     // =========================================================================
-    [McpServerTool(Name = "FindReferences")]
+    [McpServerTool(Name = "FindReferences", Title = "Find references",
+                   ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false,
+                   UseStructuredContent = true)]
     [Description("Find every SEMANTIC reference to a type or member across the solution — use this INSTEAD of grep/text search. " +
                  "Roslyn resolves the real symbol, so results include overrides and interface implementations and exclude " +
                  "false hits in comments, strings, and unrelated same-named identifiers. Use before any rename or call-site update. " +
@@ -109,7 +118,9 @@ public sealed class WendSharpTools(WorkspaceSession session)
     // =========================================================================
     // GetImplementations — every type that implements an interface or derives from a class.
     // =========================================================================
-    [McpServerTool(Name = "GetImplementations")]
+    [McpServerTool(Name = "GetImplementations", Title = "Find implementations",
+                   ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false,
+                   UseStructuredContent = true)]
     [Description("Find every concrete type in the solution that implements this interface or derives from this " +
                  "class — the real implementation surface, resolved via Roslyn's symbol graph, not by grepping " +
                  "for ': IFoo' (which misses multi-level inheritance, generic constraints, and types declared in " +
@@ -117,6 +128,10 @@ public sealed class WendSharpTools(WorkspaceSession session)
                  "result is a type whose members may need matching changes. Total: 0 means no implementers " +
                  "exist yet — if that's unexpected, confirm with DescribeSymbol that the type is actually an " +
                  "interface or has abstract/virtual members. " +
+                 "Closed.IsExhaustive tells you whether the list is PROVABLY complete: true only for a C# 15 " +
+                 "closed hierarchy or union, where no other assembly can add a derived type, so an edit across " +
+                 "all implementations is guaranteed to cover every case. For an ordinary open type it is false " +
+                 "and Implementations means 'every implementer in this solution', not 'every implementer possible'. " +
                  "On an unexpected failure, Kind is \"Error\" and Error is set — check Error first.")]
     public async Task<GetImplementationsResult> GetImplementations(
         [Description("Project name that declares the type, e.g. 'App'.")] string projectName,
@@ -132,7 +147,7 @@ public sealed class WendSharpTools(WorkspaceSession session)
             INamedTypeSymbol typeSymbol;
             try
             { typeSymbol = await ResolveTypeAsync(project, compilation, typeName, projectName, ct); }
-            catch (ArgumentException) { return new GetImplementationsResult(typeName, "NotFound", 0, []); }
+            catch (ArgumentException) { return new GetImplementationsResult(typeName, "NotFound", 0, [], ClosedHierarchyInfo.Open); }
 
             var solution = project.Solution;
             var impls = await SymbolFinder.FindImplementationsAsync(typeSymbol, solution, transitive: true, cancellationToken: ct);
@@ -146,19 +161,51 @@ public sealed class WendSharpTools(WorkspaceSession session)
             }
 
             var hitArray = await BuildSymbolHitsAsync(hits, ct);
-            return new GetImplementationsResult(typeSymbol.ToFullSignature(), typeSymbol.TypeKind.ToString(), hitArray.Length, hitArray);
+            return new GetImplementationsResult(
+                typeSymbol.ToFullSignature(), typeSymbol.TypeKind.ToString(), hitArray.Length, hitArray,
+                DescribeClosedHierarchy(typeSymbol, ct));
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            return new GetImplementationsResult(typeName, "Error", 0, [], ex.Message);
+            return new GetImplementationsResult(typeName, "Error", 0, [], ClosedHierarchyInfo.Open, ex.Message);
         }
     }
+
+    // SymbolFinder answers "what derives from this in the loaded solution"; for a C# 15 closed type
+    // the compiler answers "what CAN derive from this". Only the latter makes an exhaustive edit safe.
+    // IsClosed/IsUnion/GetClosedDerivedTypeInfo are [Experimental] (RSEXPERIMENTAL006) and may change
+    // or be removed; the suppression is scoped here so a removal breaks the build loudly.
+#pragma warning disable RSEXPERIMENTAL006
+    internal static ClosedHierarchyInfo DescribeClosedHierarchy(INamedTypeSymbol type, CancellationToken ct)
+    {
+        try
+        {
+            if (!type.IsClosed)
+                return new ClosedHierarchyInfo(IsClosed: false, type.IsUnion, IsExhaustive: false, []);
+
+            var info = type.GetClosedDerivedTypeInfo(ct);
+            return new ClosedHierarchyInfo(
+                IsClosed: true,
+                type.IsUnion,
+                IsExhaustive: info.IsComplete,
+                [.. info.ClosedDerivedTypes.Select(t => t.ToDisplayString())]);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception)
+        {
+            // Optional enrichment: never fail the tool over it.
+            return ClosedHierarchyInfo.Open;
+        }
+    }
+#pragma warning restore RSEXPERIMENTAL006
 
     // =========================================================================
     // GetOverrides — every override of a virtual/abstract member.
     // =========================================================================
-    [McpServerTool(Name = "GetOverrides")]
+    [McpServerTool(Name = "GetOverrides", Title = "Find overrides",
+                   ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false,
+                   UseStructuredContent = true)]
     [Description("Find every override of this virtual or abstract member, across the whole inheritance chain — " +
                  "not just direct subclasses — resolved via Roslyn's symbol graph. This is the other half of " +
                  "FindReferences: FindReferences finds call sites; GetOverrides finds alternate implementations " +
@@ -231,7 +278,9 @@ public sealed class WendSharpTools(WorkspaceSession session)
     // =========================================================================
     // DescribeSymbol — full public surface with resolved types (Task 1).
     // =========================================================================
-    [McpServerTool(Name = "DescribeSymbol")]
+    [McpServerTool(Name = "DescribeSymbol", Title = "Describe symbol",
+                   ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false,
+                   UseStructuredContent = true)]
     [Description("Get a type's full public/protected surface with compiler-resolved types (never `var`), base types, " +
                  "implemented interfaces, and the exact `using` directives needed to write code against it. " +
                  "Use this INSTEAD of reading the file when you need precise signatures — e.g. to author an interface, " +
@@ -309,7 +358,9 @@ public sealed class WendSharpTools(WorkspaceSession session)
     // =========================================================================
     // AnalyzeMember — dependencies, data flow, callers (Task 2).
     // =========================================================================
-    [McpServerTool(Name = "AnalyzeMember")]
+    [McpServerTool(Name = "AnalyzeMember", Title = "Analyze member",
+                   ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false,
+                   UseStructuredContent = true)]
     [Description("Get what a method actually touches — internal vs external dependencies, " +
                  "the variables that flow in (candidate parameters) and out (candidate return values) plus any captured by closures, " +
                  "and its callers — computed by the compiler INSTEAD of traced by hand. Use before extracting " +
@@ -423,7 +474,9 @@ public sealed class WendSharpTools(WorkspaceSession session)
     // The renamed solution is computed locally and DISCARDED — the session Solution
     // is never mutated; WendSharp never writes to disk.
     // =========================================================================
-    [McpServerTool(Name = "PlanRename")]
+    [McpServerTool(Name = "PlanRename", Title = "Plan rename",
+                   ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false,
+                   UseStructuredContent = true)]
     [Description("Before renaming a symbol by hand, get a compiler-verified rename plan — WendSharp computes it but never writes. " +
                  "Returns apply-ready edits (file + 1-based line/col + absolute offset/length + old/new text), plus conflicts " +
                  "(name collisions, new compile errors) and cascades (overrides, interface members, partial declarations) that " +
@@ -884,7 +937,9 @@ public sealed class WendSharpTools(WorkspaceSession session)
     // =========================================================================
     // Refresh — re-read files from disk after the agent edits them.
     // =========================================================================
-    [McpServerTool(Name = "Refresh")]
+    [McpServerTool(Name = "Refresh", Title = "Refresh from disk",
+                   ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false,
+                   UseStructuredContent = true)]
     [Description("Re-read files from disk into WendSharp's model after YOU edit them — WendSharp does NOT see your changes until " +
                  "you do this. Pass every changed, created, and deleted file (absolute paths). Always call this before " +
                  "GetDiagnostics or FindReferences after an edit, or those tools report stale results. " +
@@ -908,7 +963,9 @@ public sealed class WendSharpTools(WorkspaceSession session)
     // =========================================================================
     // GetDiagnostics — compiler errors/warnings.
     // =========================================================================
-    [McpServerTool(Name = "GetDiagnostics")]
+    [McpServerTool(Name = "GetDiagnostics", Title = "Get diagnostics",
+                   ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false,
+                   UseStructuredContent = true)]
     [Description("Report Roslyn diagnostics — compiler errors (and optionally warnings) PLUS the project's analyzer diagnostics " +
                  "(code-style, custom spec analyzers, banned-API rules) — for a project's current in-memory state, the truth " +
                  "check after you edit. Analyzer diagnostics respect .editorconfig severity and are included by default; set " +
@@ -1016,7 +1073,9 @@ public sealed class WendSharpTools(WorkspaceSession session)
     // =========================================================================
     // GetWorkspaceInfo — what WendSharp resolved, and the editor's open roots.
     // =========================================================================
-    [McpServerTool(Name = "GetWorkspaceInfo")]
+    [McpServerTool(Name = "GetWorkspaceInfo", Title = "Get workspace info",
+                   ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false,
+                   UseStructuredContent = true)]
     [Description("Report which solution WendSharp resolved and loaded, and from where: the solution file, its root " +
                  "directory, and the loaded project names. When the client exposes workspace roots (MCP roots), also " +
                  "lists every open root folder — use this to see all loaded projects when several are open. " +
@@ -1037,7 +1096,11 @@ public sealed class WendSharpTools(WorkspaceSession session)
                 .ToArray();
 
             var clientRoots = await session.GetClientRootsAsync(server, ct);
+            // Still reported so an agent can see whether the fallback is available. See
+            // WorkspaceSession.GetClientRootsAsync for why this deprecated API is kept.
+#pragma warning disable MCP9005
             var exposesRoots = server.ClientCapabilities?.Roots is not null;
+#pragma warning restore MCP9005
 
             return new WorkspaceInfoResult(solutionPath, rootDir, projects, [.. clientRoots], exposesRoots);
         }

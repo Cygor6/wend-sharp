@@ -9,11 +9,18 @@
     <!-- RS2008: analyzer release tracking is for shipped NuGet analyzers; this one is repo-local.
          RS1032: the WS0001 message wording (incl. trailing period) is mandated by the spec. -->
     <NoWarn>$(NoWarn);RS2008;RS1032</NoWarn>
+    <!-- CS9057 (analyzer built against a newer compiler than the one running) is only a warning,
+         so a failed analyzer load otherwise leaves a green build with WS0001 not running. -->
+    <WarningsAsErrors>$(WarningsAsErrors);CS9057</WarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" PrivateAssets="all" />
+    <!-- Pin to the LOWEST Roslyn this must load into, not the newest. SDK feature bands ship
+         different versions (10.0.1xx: 5.0, 10.0.4xx: 5.9) and global.json admits all of them, so a
+         higher reference silently disables WS0001 on the older ones. 4.12.0 is the same floor
+         Microsoft's own analyzer packages use. Do not raise it to match the newest SDK. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.12.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="5.9.0" PrivateAssets="all" />
   </ItemGroup>
 
 </Project>

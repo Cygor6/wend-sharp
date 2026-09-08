@@ -9,6 +9,9 @@
     <RollForward>LatestMajor</RollForward>
     <AssemblyName>WendSharp</AssemblyName>
     <RootNamespace>WendSharp</RootNamespace>
+    <!-- A failed analyzer load is only a warning, and both BannedApiAnalyzers and WS0001 guard
+         invariants here, so make it an error. -->
+    <WarningsAsErrors>$(WarningsAsErrors);CS9057</WarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,23 +19,21 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="ModelContextProtocol" Version="1.4.1" />
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.6.0" />
-    <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.MSBuild" Version="5.6.0" />
+    <PackageReference Include="ModelContextProtocol" Version="2.2.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.9.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.MSBuild" Version="5.9.0" />
   </ItemGroup>
 
   <!-- Read-only invariant (Part A): ban disk-write and Solution-mutation APIs; escalated to error in .editorconfig. -->
   <ItemGroup>
-    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="3.3.4" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="5.6.0" PrivateAssets="all" />
     <AdditionalFiles Include="BannedSymbols.txt" />
   </ItemGroup>
 
   <!-- WS0001 spec analyzer (Part B): the MCP tool error contract. -->
   <ItemGroup>
-    <ProjectReference Include="..\WendSharp.Analyzers\WendSharp.Analyzers.csproj"
-                      OutputItemType="Analyzer"
-                      ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\WendSharp.Analyzers\WendSharp.Analyzers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <PropertyGroup Condition="'$(PublishReadyToRun)' == 'true'">
