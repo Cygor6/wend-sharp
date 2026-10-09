@@ -21,6 +21,12 @@ public class WendSharpToolsTests
         }
         throw new FileNotFoundException("Could not locate repo root with sample/Sample.slnx");
     }
+    static IEnumerable<(string FilePath, ReferenceHit Hit)> AllHits(FindReferencesResult result) =>
+        result.Files.SelectMany(f => f.Hits.Select(h => (f.FilePath, h)));
+
+    static List<RenameEdit> AllEdits(PlanRenameResult plan) =>
+        plan.Files.SelectMany(f => f.Edits ?? []).ToList();
+
     static async Task<WendSharpTools> CreateToolsAsync()
     {
         var session = new WorkspaceSession(NullLogger<WorkspaceSession>.Instance, SampleSolutionPath);
@@ -33,12 +39,12 @@ public class WendSharpToolsTests
     public async Task FindReferences_Add_ReturnsExactlyTwoReferences()
     {
         var tools = await CreateToolsAsync();
-        var result = await tools.FindReferences("App", "Add", ct: CancellationToken.None);
+        var result = await tools.FindReferences("Add", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(result.Total).IsEqualTo(2);
         await Assert.That(result.Symbol).IsEqualTo("SampleApp.Calculator.Add(int, int)");
 
-        foreach (var hit in result.References)
+        foreach (var hit in AllHits(result))
         {
             await Assert.That(hit.FilePath).Contains("Program.cs");
         }
@@ -48,7 +54,7 @@ public class WendSharpToolsTests
     public async Task DescribeSymbol_Calculator_ShowsResolvedIntTypes()
     {
         var tools = await CreateToolsAsync();
-        var desc = await tools.DescribeSymbol("App", "SampleApp.Calculator", CancellationToken.None);
+        var desc = await tools.DescribeSymbol("SampleApp.Calculator", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(desc.FullName).Contains("Calculator");
 
@@ -62,7 +68,7 @@ public class WendSharpToolsTests
     {
         var tools = await CreateToolsAsync();
         var analysis = await tools.AnalyzeMember(
-            "App", "OrderService", "CalculateTotal", ct: CancellationToken.None);
+            "OrderService", "CalculateTotal", projectName: "App", includeSource: true, ct: CancellationToken.None);
 
         var hasTaxRate = analysis.InternalDependencies.Any(d => d.Contains("_taxRate"));
         await Assert.That(hasTaxRate).IsTrue();
@@ -76,7 +82,7 @@ public class WendSharpToolsTests
         var tools = await CreateToolsAsync();
 
         var analysis = await tools.AnalyzeMember(
-            "App", "SampleApp.Calculator", "Add", ct: CancellationToken.None);
+            "SampleApp.Calculator", "Add", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(analysis.DataFlowsIn).Contains("a");
         await Assert.That(analysis.DataFlowsIn).Contains("b");
@@ -88,7 +94,7 @@ public class WendSharpToolsTests
         var tools = await CreateToolsAsync();
 
         var analysis = await tools.AnalyzeMember(
-            "App", "SampleApp.PropertyFlowExample", "BlockProperty", ct: CancellationToken.None);
+            "SampleApp.PropertyFlowExample", "BlockProperty", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(analysis.DataFlowsIn.Contains("value")).IsTrue();
         await Assert.That(analysis.DataFlowsIn.Length).IsGreaterThan(0);
@@ -102,7 +108,7 @@ public class WendSharpToolsTests
         var tools = await CreateToolsAsync();
 
         var analysis = await tools.AnalyzeMember(
-            "App", "SampleApp.PropertyFlowExample", "InitOnlyProperty", ct: CancellationToken.None);
+            "SampleApp.PropertyFlowExample", "InitOnlyProperty", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(analysis.DataFlowsIn.Contains("value")).IsTrue();
 
@@ -115,7 +121,7 @@ public class WendSharpToolsTests
         var tools = await CreateToolsAsync();
 
         var analysis = await tools.AnalyzeMember(
-            "App", "SampleApp.PropertyFlowExample", "AutoProperty", ct: CancellationToken.None);
+            "SampleApp.PropertyFlowExample", "AutoProperty", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(analysis.DataFlowsIn.Length).IsEqualTo(0);
         await Assert.That(analysis.DataFlowsOut.Length).IsEqualTo(0);
@@ -127,7 +133,7 @@ public class WendSharpToolsTests
         var tools = await CreateToolsAsync();
 
         var analysis = await tools.AnalyzeMember(
-            "App", "SampleApp.EventFlowExample", "CustomEvent", ct: CancellationToken.None);
+            "SampleApp.EventFlowExample", "CustomEvent", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(analysis.DataFlowsIn.Contains("value")).IsTrue();
         await Assert.That(analysis.DataFlowsIn.Length).IsGreaterThan(0);
@@ -146,7 +152,7 @@ public class WendSharpToolsTests
             beforeBytes[f] = await File.ReadAllBytesAsync(f, CancellationToken.None);
 
         var plan = await tools.PlanRename(
-            projectName: "App", fullyQualifiedSymbolName: "Add", newName: "Sum",
+            detail: true, projectName: "App", fullyQualifiedSymbolName: "Add", newName: "Sum",
             ct: CancellationToken.None);
 
         await Assert.That(plan.Error).IsNull();
@@ -154,12 +160,12 @@ public class WendSharpToolsTests
         await Assert.That(plan.NewName).IsEqualTo("Sum");
         await Assert.That(plan.OldName).IsEqualTo("Add");
 
-        await Assert.That(plan.Edits.Count).IsGreaterThan(0);
+        await Assert.That(AllEdits(plan).Count).IsGreaterThan(0);
         await Assert.That(plan.FileCount).IsGreaterThanOrEqualTo(2);
-        await Assert.That(plan.Edits.Any(e => e.FilePath.Contains("Calculator.cs"))).IsTrue();
-        await Assert.That(plan.Edits.Any(e => e.FilePath.Contains("Program.cs"))).IsTrue();
+        await Assert.That(AllEdits(plan).Any(e => e.FilePath.Contains("Calculator.cs"))).IsTrue();
+        await Assert.That(AllEdits(plan).Any(e => e.FilePath.Contains("Program.cs"))).IsTrue();
 
-        foreach (var e in plan.Edits)
+        foreach (var e in AllEdits(plan))
         {
             await Assert.That(e.OldText).IsEqualTo("Add");
             await Assert.That(e.NewText).IsEqualTo("Sum");
@@ -168,7 +174,7 @@ public class WendSharpToolsTests
             await Assert.That(e.StartColumn).IsGreaterThanOrEqualTo(1);
         }
 
-        var programEdit = plan.Edits.First(e => e.FilePath.Contains("Program.cs"));
+        var programEdit = AllEdits(plan).First(e => e.FilePath.Contains("Program.cs"));
         var programText = await File.ReadAllTextAsync(
             Path.Combine(SampleAppPath, "Program.cs"), CancellationToken.None);
         await Assert.That(programText.Substring(programEdit.StartOffset, programEdit.Length)).IsEqualTo("Add");
@@ -322,14 +328,14 @@ public class WendSharpToolsTests
         {
             var tools = await CreateToolsAsync();
 
-            await tools.DescribeSymbol("App", "SampleApp.Calculator", CancellationToken.None);
+            await tools.DescribeSymbol("SampleApp.Calculator", projectName: "App", ct: CancellationToken.None);
 
             await File.WriteAllTextAsync(newPath,
                 "namespace SampleApp;\npublic static class CacheProbe { public static int Probe() => 7; }\n",
                 CancellationToken.None);
             await tools.Refresh([newPath], CancellationToken.None);
 
-            var desc = await tools.DescribeSymbol("App", "SampleApp.CacheProbe", CancellationToken.None);
+            var desc = await tools.DescribeSymbol("SampleApp.CacheProbe", projectName: "App", ct: CancellationToken.None);
             await Assert.That(desc.Error).IsNull();
             await Assert.That(desc.Members.Any(m => m.Signature.Contains("Probe"))).IsTrue();
         }
@@ -438,10 +444,10 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
         var plan = await tools.PlanRename(
-            projectName: "App", fullyQualifiedSymbolName: "Add", newName: "Sum",
+            detail: true, projectName: "App", fullyQualifiedSymbolName: "Add", newName: "Sum",
             ct: CancellationToken.None);
 
-        var hasSumEdit = plan.Edits.Any(e => e.NewText.Contains("Sum"));
+        var hasSumEdit = AllEdits(plan).Any(e => e.NewText.Contains("Sum"));
         await Assert.That(hasSumEdit).IsTrue();
     }
 
@@ -450,7 +456,7 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
         var plan = await tools.PlanRename(
-            projectName: "App", fullyQualifiedSymbolName: "Alpha", newName: "Beta",
+            detail: true, projectName: "App", fullyQualifiedSymbolName: "Alpha", newName: "Beta",
             ct: CancellationToken.None);
 
         await Assert.That(plan.HasConflicts).IsTrue();
@@ -465,7 +471,7 @@ static int GetArg(string name)
         var tools = await CreateToolsAsync();
 
         var plan = await tools.PlanRename(
-            projectName: "App", fullyQualifiedSymbolName: "Alpha", newName: "Gamma",
+            detail: true, projectName: "App", fullyQualifiedSymbolName: "Alpha", newName: "Gamma",
             ct: CancellationToken.None);
 
         await Assert.That(plan.Error).IsNull();
@@ -480,7 +486,7 @@ static int GetArg(string name)
         var fixturePath = Path.Combine(SampleAppPath, "RenameFixtures.cs");
 
         var plan = await tools.PlanRename(
-            projectName: "App", filePath: fixturePath, line: 10, column: 25,
+            detail: true, projectName: "App", filePath: fixturePath, line: 10, column: 25,
             newName: "Execute", ct: CancellationToken.None);
 
         await Assert.That(plan.Error).IsNull();
@@ -492,7 +498,7 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
         var plan = await tools.PlanRename(
-            projectName: "App", fullyQualifiedSymbolName: "OnConfigured", newName: "OnReady",
+            detail: true, projectName: "App", fullyQualifiedSymbolName: "OnConfigured", newName: "OnReady",
             ct: CancellationToken.None);
 
         await Assert.That(plan.Error).IsNull();
@@ -506,7 +512,7 @@ static int GetArg(string name)
         var fixturePath = Path.Combine(SampleAppPath, "InheritanceFixtures.cs");
 
         var plan = await tools.PlanRename(
-            projectName: "App", filePath: fixturePath, line: 5, column: 9,
+            detail: true, projectName: "App", filePath: fixturePath, line: 5, column: 9,
             newName: "Evaluate", ct: CancellationToken.None);
 
         await Assert.That(plan.Error).IsNull();
@@ -520,12 +526,12 @@ static int GetArg(string name)
         var fixturePath = Path.Combine(SampleAppPath, "RenameFixtures.cs");
 
         var plan = await tools.PlanRename(
-            projectName: "App", filePath: fixturePath, line: 10, column: 25,
+            detail: true, projectName: "App", filePath: fixturePath, line: 10, column: 25,
             newName: "Execute", ct: CancellationToken.None);
 
         await Assert.That(plan.Error).IsNull();
-        await Assert.That(plan.Edits.Any(e => e.Location == "Nameof")).IsTrue();
-        await Assert.That(plan.Edits.Any(e => e.Location == "Cref")).IsTrue();
+        await Assert.That(AllEdits(plan).Any(e => e.Location == "Nameof")).IsTrue();
+        await Assert.That(AllEdits(plan).Any(e => e.Location == "Cref")).IsTrue();
     }
 
     [Test]
@@ -533,11 +539,11 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
         var plan = await tools.PlanRename(
-            projectName: "App", fullyQualifiedSymbolName: "Add", newName: "Sum",
+            detail: true, projectName: "App", fullyQualifiedSymbolName: "Add", newName: "Sum",
             ct: CancellationToken.None);
 
         await Assert.That(plan.Error).IsNull();
-        await Assert.That(plan.Edits.Any(e => e.Location == "Comment")).IsFalse();
+        await Assert.That(AllEdits(plan).Any(e => e.Location == "Comment")).IsFalse();
     }
 
     [Test]
@@ -545,12 +551,12 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
         var plan = await tools.PlanRename(
-            projectName: "App", fullyQualifiedSymbolName: "Add", newName: "1foo",
+            detail: true, projectName: "App", fullyQualifiedSymbolName: "Add", newName: "1foo",
             ct: CancellationToken.None);
 
         await Assert.That(plan.NewNameValid).IsFalse();
         await Assert.That(plan.Error).IsNotNull();
-        await Assert.That(plan.Edits.Count).IsEqualTo(0);
+        await Assert.That(AllEdits(plan).Count).IsEqualTo(0);
         await Assert.That(plan.HasConflicts).IsFalse();
     }
 
@@ -559,11 +565,11 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
         var plan = await tools.PlanRename(
-            projectName: "App", fullyQualifiedSymbolName: "DoesNotExist", newName: "X",
+            detail: true, projectName: "App", fullyQualifiedSymbolName: "DoesNotExist", newName: "X",
             ct: CancellationToken.None);
 
         await Assert.That(plan.Error).IsNotNull();
-        await Assert.That(plan.Edits.Count).IsEqualTo(0);
+        await Assert.That(AllEdits(plan).Count).IsEqualTo(0);
     }
 
     [Test]
@@ -572,14 +578,14 @@ static int GetArg(string name)
         var tools = await CreateToolsAsync();
 
         var plan = await tools.PlanRename(
-            projectName: "App", fullyQualifiedSymbolName: "DoWork", newName: "Execute",
+            detail: true, projectName: "App", fullyQualifiedSymbolName: "DoWork", newName: "Execute",
             ct: CancellationToken.None);
 
         await Assert.That(plan.Error).IsNotNull();
         await Assert.That(plan.Error).Contains("ambiguous");
         await Assert.That(plan.Error).Contains("WidgetBase.DoWork");
         await Assert.That(plan.Error).Contains("WidgetDerived.DoWork");
-        await Assert.That(plan.Edits.Count).IsEqualTo(0);
+        await Assert.That(AllEdits(plan).Count).IsEqualTo(0);
     }
 
     [Test]
@@ -589,13 +595,13 @@ static int GetArg(string name)
         var calcPath = Path.Combine(SampleAppPath, "Calculator.cs");
 
         var plan = await tools.PlanRename(
-            projectName: "App", filePath: calcPath, line: 5, column: 23,
+            detail: true, projectName: "App", filePath: calcPath, line: 5, column: 23,
             newName: "Sum", ct: CancellationToken.None);
 
         await Assert.That(plan.Error).IsNull();
         await Assert.That(plan.Symbol).Contains("Calculator.Add");
         await Assert.That(plan.FileCount).IsGreaterThanOrEqualTo(2);
-        await Assert.That(plan.Edits.Any(e => e.OldText == "Add" && e.NewText == "Sum")).IsTrue();
+        await Assert.That(AllEdits(plan).Any(e => e.OldText == "Add" && e.NewText == "Sum")).IsTrue();
     }
 
     [Test]
@@ -605,11 +611,11 @@ static int GetArg(string name)
         var calcPath = Path.Combine(SampleAppPath, "Calculator.cs");
 
         var plan = await tools.PlanRename(
-            projectName: "App", filePath: calcPath, line: 5, column: 21,
+            detail: true, projectName: "App", filePath: calcPath, line: 5, column: 21,
             newName: "Sum", ct: CancellationToken.None);
 
         await Assert.That(plan.Error).IsNotNull();
-        await Assert.That(plan.Edits.Count).IsEqualTo(0);
+        await Assert.That(AllEdits(plan).Count).IsEqualTo(0);
     }
 
     [Test]
@@ -623,10 +629,10 @@ static int GetArg(string name)
 
         var fixturePath = Path.Combine(SampleAppPath, "RenameFixtures.cs");
         var plan = await tools.PlanRename(
-            projectName: "App", filePath: fixturePath, line: 10, column: 25,
+            detail: true, projectName: "App", filePath: fixturePath, line: 10, column: 25,
             newName: "Execute", ct: CancellationToken.None);
 
-        await Assert.That(plan.Edits.Count).IsGreaterThan(0);
+        await Assert.That(AllEdits(plan).Count).IsGreaterThan(0);
 
         foreach (var f in sampleFiles)
         {
@@ -713,7 +719,7 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
 
-        var analysis = await tools.AnalyzeMember("App", "SampleApp.OverloadExample", "Calculate", ct: CancellationToken.None);
+        var analysis = await tools.AnalyzeMember("SampleApp.OverloadExample", "Calculate", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(analysis.Error).IsNotNull();
         await Assert.That(analysis.Error).Contains("overloaded");
@@ -721,7 +727,7 @@ static int GetArg(string name)
         await Assert.That(analysis.Error).Contains("\"string\"");
         await Assert.That(analysis.Error).Contains("parameterTypes");
 
-        await Assert.That(analysis.Source).IsEmpty();
+        await Assert.That(analysis.Source).IsNull();
         await Assert.That(analysis.InternalDependencies.Length).IsEqualTo(0);
     }
 
@@ -731,7 +737,7 @@ static int GetArg(string name)
         var tools = await CreateToolsAsync();
 
         var analysis = await tools.AnalyzeMember(
-            "App", "SampleApp.OverloadExample", "Calculate", "string", CancellationToken.None);
+            "SampleApp.OverloadExample", "Calculate", "string", projectName: "App", includeSource: true, ct: CancellationToken.None);
 
         await Assert.That(analysis.Source).Contains("Calculate(string");
         await Assert.That(analysis.Source).DoesNotContain("Calculate(int");
@@ -743,7 +749,7 @@ static int GetArg(string name)
         var tools = await CreateToolsAsync();
 
         var analysis = await tools.AnalyzeMember(
-            "App", "OrderService", "CalculateTotal", ct: CancellationToken.None);
+            "OrderService", "CalculateTotal", projectName: "App", includeSource: true, ct: CancellationToken.None);
 
         await Assert.That(analysis.Source).Contains("CalculateTotal");
     }
@@ -754,7 +760,7 @@ static int GetArg(string name)
         var tools = await CreateToolsAsync();
 
         var analysis = await tools.AnalyzeMember(
-            "App", "SampleApp.MemberKindFixture", "this[]", ct: CancellationToken.None);
+            "SampleApp.MemberKindFixture", "this[]", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(analysis.Error).IsNull();
         await Assert.That(analysis.DataFlowsIn.Length).IsGreaterThan(0);
@@ -768,7 +774,7 @@ static int GetArg(string name)
         var tools = await CreateToolsAsync();
 
         var analysis = await tools.AnalyzeMember(
-            "App", "SampleApp.MemberKindFixture", "op_Addition", ct: CancellationToken.None);
+            "SampleApp.MemberKindFixture", "op_Addition", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(analysis.Error).IsNull();
         await Assert.That(analysis.DataFlowsIn.Length).IsGreaterThan(0);
@@ -779,7 +785,7 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
 
-        var result = await tools.FindReferences("App", "Calculate", ct: CancellationToken.None);
+        var result = await tools.FindReferences("Calculate", projectName: "App", ct: CancellationToken.None);
 
         // Overload ambiguity lands in Error with the valid parameterTypes options (acceptable per design).
         await Assert.That(result.Error).IsNotNull();
@@ -793,7 +799,7 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
 
-        var result = await tools.FindReferences("App", "Calculate", "string", CancellationToken.None);
+        var result = await tools.FindReferences("Calculate", "string", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(result.Kind).IsEqualTo("Method");
         await Assert.That(result.Symbol).Contains("Calculate(string");
@@ -804,7 +810,7 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
 
-        var result = await tools.GetOverrides("App", "SampleApp.OverloadableBase", "Compute", ct: CancellationToken.None);
+        var result = await tools.GetOverrides("SampleApp.OverloadableBase", "Compute", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(result.Kind).IsEqualTo("Ambiguous");
         await Assert.That(result.Error).Contains("parameterTypes");
@@ -817,7 +823,7 @@ static int GetArg(string name)
         var tools = await CreateToolsAsync();
 
         var result = await tools.GetOverrides(
-            "App", "SampleApp.OverloadableBase", "Compute", "int", CancellationToken.None);
+            "SampleApp.OverloadableBase", "Compute", "int", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(result.Kind).IsNotEqualTo("Ambiguous");
         await Assert.That(result.Total).IsGreaterThan(0);
@@ -858,7 +864,7 @@ static int GetArg(string name)
     public async Task DescribeSymbol_RecordStruct_ShowsPrimaryConstructorAndPositionalProperties()
     {
         var tools = await CreateToolsAsync();
-        var desc = await tools.DescribeSymbol("App", "SampleApp.Point", CancellationToken.None);
+        var desc = await tools.DescribeSymbol("SampleApp.Point", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(desc.Members.Length).IsEqualTo(3);
 
@@ -883,7 +889,7 @@ static int GetArg(string name)
     public async Task DescribeSymbol_RecordClass_HidesEqualityContractAndClone()
     {
         var tools = await CreateToolsAsync();
-        var desc = await tools.DescribeSymbol("App", "SampleApp.Tag", CancellationToken.None);
+        var desc = await tools.DescribeSymbol("SampleApp.Tag", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(desc.Members.Length).IsEqualTo(4);
 
@@ -899,7 +905,7 @@ static int GetArg(string name)
     public async Task DescribeSymbol_PlainClass_HidesPropertyAccessors()
     {
         var tools = await CreateToolsAsync();
-        var desc = await tools.DescribeSymbol("App", "SampleApp.Counter", CancellationToken.None);
+        var desc = await tools.DescribeSymbol("SampleApp.Counter", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(desc.Members.Length).IsEqualTo(3);
 
@@ -916,7 +922,7 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
 
-        var desc = await tools.DescribeSymbol("App", "Calculator", CancellationToken.None);
+        var desc = await tools.DescribeSymbol("Calculator", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(desc.Error).IsNotNull();
         await Assert.That(desc.Error).Contains("SampleApp.Calculator");
@@ -931,7 +937,7 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
 
-        var desc = await tools.DescribeSymbol("App", "OtherApp.Calculator", CancellationToken.None);
+        var desc = await tools.DescribeSymbol("OtherApp.Calculator", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(desc.FullName).Contains("OtherApp.Calculator");
     }
@@ -941,12 +947,12 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
 
-        var analysis = await tools.AnalyzeMember("App", "Calculator", "Label", ct: CancellationToken.None);
+        var analysis = await tools.AnalyzeMember("Calculator", "Label", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(analysis.Error).IsNotNull();
         await Assert.That(analysis.Error).Contains("SampleApp.Calculator");
         await Assert.That(analysis.Error).Contains("OtherApp.Calculator");
-        await Assert.That(analysis.Source).IsEmpty();
+        await Assert.That(analysis.Source).IsNull();
     }
 
     [Test]
@@ -965,7 +971,7 @@ static int GetArg(string name)
     public async Task DescribeSymbol_TypeNotFound_ReturnsError()
     {
         var tools = await CreateToolsAsync();
-        var desc = await tools.DescribeSymbol("App", "SampleApp.NoSuchType", CancellationToken.None);
+        var desc = await tools.DescribeSymbol("SampleApp.NoSuchType", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(desc.Error).IsNotNull();
         await Assert.That(desc.Members.Length).IsEqualTo(0);
@@ -978,11 +984,11 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
         var analysis = await tools.AnalyzeMember(
-            "App", "SampleApp.Calculator", "NoSuchMember", ct: CancellationToken.None);
+            "SampleApp.Calculator", "NoSuchMember", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(analysis.Error).IsNotNull();
         await Assert.That(analysis.Error).Contains("NoSuchMember");
-        await Assert.That(analysis.Source).IsEmpty();
+        await Assert.That(analysis.Source).IsNull();
         await Assert.That(analysis.Callers.Length).IsEqualTo(0);
     }
 
@@ -1009,7 +1015,7 @@ static int GetArg(string name)
             beforeBytes[f] = await File.ReadAllBytesAsync(f, CancellationToken.None);
 
         var plan = await tools.PlanRename(
-            projectName: "App", fullyQualifiedSymbolName: "SampleApp.Foo",
+            detail: true, projectName: "App", fullyQualifiedSymbolName: "SampleApp.Foo",
             newName: "Bar", renameFile: true, ct: CancellationToken.None);
 
         await Assert.That(plan.Error).IsNull();
@@ -1020,8 +1026,8 @@ static int GetArg(string name)
         await Assert.That(rename.NewPath).Contains("Bar.cs");
         await Assert.That(Path.GetDirectoryName(rename.OldPath)).IsEqualTo(Path.GetDirectoryName(rename.NewPath));
 
-        await Assert.That(plan.Edits.Any(e => e.FilePath.Contains("Foo.cs"))).IsTrue();
-        await Assert.That(plan.Edits.Any(e => e.FilePath.Contains("FooConsumer.cs"))).IsTrue();
+        await Assert.That(AllEdits(plan).Any(e => e.FilePath.Contains("Foo.cs"))).IsTrue();
+        await Assert.That(AllEdits(plan).Any(e => e.FilePath.Contains("FooConsumer.cs"))).IsTrue();
         await Assert.That(plan.FileCount).IsGreaterThanOrEqualTo(2);
 
         foreach (var f in sampleFiles)
@@ -1036,13 +1042,13 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
         var plan = await tools.PlanRename(
-            projectName: "App", fullyQualifiedSymbolName: "SampleApp.Foo",
+            detail: true, projectName: "App", fullyQualifiedSymbolName: "SampleApp.Foo",
             newName: "Bar", renameFile: false, ct: CancellationToken.None);
 
         await Assert.That(plan.Error).IsNull();
 
         await Assert.That(plan.FileRenames.Count).IsEqualTo(0);
-        await Assert.That(plan.Edits.Count).IsGreaterThan(0);
+        await Assert.That(AllEdits(plan).Count).IsGreaterThan(0);
     }
 
     [Test]
@@ -1053,19 +1059,19 @@ static int GetArg(string name)
         await session.InitializeAsync(CancellationToken.None);
         var tools = new WendSharpTools(session);
 
-        var desc = await tools.DescribeSymbol("WendSharp", "SymbolExtensions", CancellationToken.None);
+        var desc = await tools.DescribeSymbol("SymbolExtensions", projectName: "WendSharp", ct: CancellationToken.None);
         await Assert.That(desc.Error).IsNull();
         await Assert.That(desc.Members.Any(m => m.Kind == "Method" && m.Signature.Contains("IsContainedBy"))).IsTrue();
         await Assert.That(desc.Members.Any(m => m.Kind == "Method" && m.Signature.Contains("ToFullSignature"))).IsTrue();
 
         await Assert.That(desc.Members.Any(m => m.Kind == "NamedType")).IsFalse();
 
-        var isContainedBy = await tools.FindReferences("WendSharp", "IsContainedBy", ct: CancellationToken.None);
+        var isContainedBy = await tools.FindReferences("IsContainedBy", projectName: "WendSharp", ct: CancellationToken.None);
         await Assert.That(isContainedBy.Kind).IsEqualTo("Method");
 
         await Assert.That(isContainedBy.Total).IsGreaterThan(0);
 
-        var toFullSig = await tools.FindReferences("WendSharp", "ToFullSignature", ct: CancellationToken.None);
+        var toFullSig = await tools.FindReferences("ToFullSignature", projectName: "WendSharp", ct: CancellationToken.None);
         await Assert.That(toFullSig.Kind).IsEqualTo("Method");
 
         await Assert.That(toFullSig.Total).IsGreaterThan(0);
@@ -1076,7 +1082,7 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
 
-        var desc = await tools.DescribeSymbol("App", "SampleApp.CustomerRepository", CancellationToken.None);
+        var desc = await tools.DescribeSymbol("SampleApp.CustomerRepository", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(desc.RequiredUsings).Contains("System.Threading.Tasks");
         await Assert.That(desc.RequiredUsings).Contains("SampleApp.Domain");
@@ -1091,7 +1097,7 @@ static int GetArg(string name)
     public async Task DescribeSymbol_Declaration_SealedRecord()
     {
         var tools = await CreateToolsAsync();
-        var desc = await tools.DescribeSymbol("App", "SampleApp.Tag", CancellationToken.None);
+        var desc = await tools.DescribeSymbol("SampleApp.Tag", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(desc.Error).IsNull();
         await Assert.That(desc.Declaration.Contains("sealed")).IsTrue();
@@ -1104,7 +1110,7 @@ static int GetArg(string name)
     public async Task DescribeSymbol_Declaration_ReadonlyRecordStruct()
     {
         var tools = await CreateToolsAsync();
-        var desc = await tools.DescribeSymbol("App", "SampleApp.Point", CancellationToken.None);
+        var desc = await tools.DescribeSymbol("SampleApp.Point", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(desc.Error).IsNull();
         await Assert.That(desc.Declaration.Contains("readonly")).IsTrue();
@@ -1116,7 +1122,7 @@ static int GetArg(string name)
     public async Task DescribeSymbol_Declaration_StaticClass()
     {
         var tools = await CreateToolsAsync();
-        var desc = await tools.DescribeSymbol("App", "SampleApp.Calculator", CancellationToken.None);
+        var desc = await tools.DescribeSymbol("SampleApp.Calculator", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(desc.Error).IsNull();
         await Assert.That(desc.Declaration.Contains("static")).IsTrue();
@@ -1128,7 +1134,7 @@ static int GetArg(string name)
     public async Task DescribeSymbol_Declaration_Interface()
     {
         var tools = await CreateToolsAsync();
-        var desc = await tools.DescribeSymbol("App", "SampleApp.IComputable", CancellationToken.None);
+        var desc = await tools.DescribeSymbol("SampleApp.IComputable", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(desc.Error).IsNull();
         await Assert.That(desc.Declaration.Contains("interface")).IsTrue();
@@ -1139,7 +1145,7 @@ static int GetArg(string name)
     public async Task DescribeSymbol_Declaration_AbstractClass()
     {
         var tools = await CreateToolsAsync();
-        var desc = await tools.DescribeSymbol("App", "SampleApp.PricingService", CancellationToken.None);
+        var desc = await tools.DescribeSymbol("SampleApp.PricingService", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(desc.Error).IsNull();
         await Assert.That(desc.Declaration.Contains("abstract")).IsTrue();
@@ -1151,7 +1157,7 @@ static int GetArg(string name)
     public async Task DescribeSymbol_Declaration_GenericWithConstraint()
     {
         var tools = await CreateToolsAsync();
-        var desc = await tools.DescribeSymbol("App", "Repository", CancellationToken.None);
+        var desc = await tools.DescribeSymbol("Repository", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(desc.Error).IsNull();
         await Assert.That(desc.Declaration.Contains("class")).IsTrue();
@@ -1168,7 +1174,7 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
         var analysis = await tools.AnalyzeMember(
-            "App", "OrderService", "MakeScaler", ct: CancellationToken.None);
+            "OrderService", "MakeScaler", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(analysis.Error).IsNull();
         await Assert.That(analysis.Captured.Contains("multiplier")).IsTrue();
@@ -1180,7 +1186,7 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
         var analysis = await tools.AnalyzeMember(
-            "App", "OrderService", "CalculateTotal", ct: CancellationToken.None);
+            "OrderService", "CalculateTotal", projectName: "App", ct: CancellationToken.None);
 
         await Assert.That(analysis.Error).IsNull();
         await Assert.That(analysis.Captured.Length).IsEqualTo(0);
@@ -1221,7 +1227,7 @@ static int GetArg(string name)
     {
         var tools = await CreateToolsAsync();
         var plan = await tools.PlanRename(
-            projectName: "App", fullyQualifiedSymbolName: "Alpha", newName: "Beta",
+            detail: true, projectName: "App", fullyQualifiedSymbolName: "Alpha", newName: "Beta",
             ct: CancellationToken.None);
 
         await Assert.That(plan.HasConflicts).IsTrue();

@@ -19,6 +19,17 @@ public sealed class WorkspaceSession(ILogger<WorkspaceSession> logger, string? s
 
     readonly ConcurrentDictionary<ProjectId, HashSet<string>> _sourcePathCache = new();
 
+    // MSBuild load problems, kept for the agent (GetWorkspaceInfo) as well as logged.
+    const int MaxLoadDiagnostics = 50;
+    readonly ConcurrentQueue<string> _loadDiagnostics = new();
+
+    // Last-seen disk state of every document file, so edits made on disk are picked up on the next
+    // tool call without the agent having to remember Refresh. A null stamp marks a document whose
+    // file disappeared: if it comes back (dotnet clean followed by a build regenerating obj/*.cs),
+    // it is added again. Guarded by _gate.
+    readonly record struct DiskStamp(DateTime WriteTimeUtc, long Length);
+    readonly Dictionary<string, DiskStamp?> _stamps = new(StringComparer.OrdinalIgnoreCase);
+
     public Solution Solution =>
         Volatile.Read(ref _solution)
         ?? throw new InvalidOperationException(
@@ -26,12 +37,19 @@ public sealed class WorkspaceSession(ILogger<WorkspaceSession> logger, string? s
 
     public string? LoadedSolutionPath => _loadedSolutionPath;
 
+    public IReadOnlyList<string> LoadDiagnostics => [.. _loadDiagnostics];
+
     public ValueTask InitializeAsync(CancellationToken ct) => InitializeAsync(null, ct);
 
+    /// <summary>Loads the solution on first use. Once loaded, every call first syncs the model with
+    /// disk (see <see cref="SyncWithDiskAsync"/>), so tools never answer from stale text.</summary>
     public async ValueTask InitializeAsync(McpServer? server, CancellationToken ct)
     {
         if (Volatile.Read(ref _solution) is not null)
+        {
+            await SyncWithDiskAsync(ct);
             return;
+        }
         await _gate.WaitAsync(ct);
         try
         {
@@ -42,15 +60,79 @@ public sealed class WorkspaceSession(ILogger<WorkspaceSession> logger, string? s
 
             _workspace?.Dispose();
             _workspace = MSBuildWorkspace.Create();
-            _workspace.RegisterWorkspaceFailedHandler(e => logger.LogWarning("MSBuild: {Message}", e.Diagnostic.Message));
+            _workspace.RegisterWorkspaceFailedHandler(e =>
+            {
+                logger.LogWarning("MSBuild: {Message}", e.Diagnostic.Message);
+                if (_loadDiagnostics.Count < MaxLoadDiagnostics)
+                    _loadDiagnostics.Enqueue(e.Diagnostic.Message);
+            });
             var loaded = await _workspace.OpenSolutionAsync(path, cancellationToken: ct);
 
             _loadedSolutionPath = path;
+
+            _stamps.Clear();
+            foreach (var docPath in DocumentPaths(loaded))
+            {
+                if (TryReadStamp(docPath, out var stamp) && stamp is { } existing)
+                    _stamps[docPath] = existing;
+            }
 
             Volatile.Write(ref _solution, loaded);
             logger.LogInformation("Loaded {Count} project(s) from {Path}.", loaded.Projects.Count(), path);
         }
         finally { _gate.Release(); }
+    }
+
+    /// <summary>Re-reads every document whose file changed on disk since it was last read, removes
+    /// documents whose file was deleted, and re-adds a removed document whose file came back. New
+    /// files are NOT discovered here: only the agent knows it created one, so those still go through
+    /// <see cref="RefreshAsync"/>.</summary>
+    public async ValueTask<RefreshResult> SyncWithDiskAsync(CancellationToken ct)
+    {
+        if (Volatile.Read(ref _solution) is null)
+            return new RefreshResult([], [], [], []);
+
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var changed = new List<string>();
+            foreach (var (path, stamp) in _stamps)
+            {
+                if (TryReadStamp(path, out var current) && current != stamp)
+                    changed.Add(path);
+            }
+            if (changed.Count == 0)
+                return new RefreshResult([], [], [], []);
+
+            var result = await RefreshCoreAsync(changed, ct);
+            logger.LogDebug("Synced {Count} file(s) changed on disk.", changed.Count);
+            return result;
+        }
+        finally { _gate.Release(); }
+    }
+
+    static IEnumerable<string> DocumentPaths(Solution solution) =>
+        solution.Projects
+            .SelectMany(p => p.Documents)
+            .Select(d => d.FilePath)
+            .OfType<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Reads a file's stamp; null when the file does not exist. Returns false when the file
+    /// could not be inspected (locked, access denied), so a transient error never reads as a delete.</summary>
+    static bool TryReadStamp(string path, out DiskStamp? stamp)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            stamp = info.Exists ? new DiskStamp(info.LastWriteTimeUtc, info.Length) : null;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            stamp = null;
+            return false;
+        }
     }
 
     async ValueTask<string> ResolveSolutionPathAsync(McpServer? server, CancellationToken ct)
@@ -337,48 +419,66 @@ public sealed class WorkspaceSession(ILogger<WorkspaceSession> logger, string? s
         await _gate.WaitAsync(ct);
         try
         {
-            var working = Volatile.Read(ref _solution)
-                ?? throw new InvalidOperationException("RefreshAsync called before initialization.");
-            var reloaded = new List<string>();
-            var added = new List<string>();
-            var removed = new List<string>();
-            var unmapped = new List<string>();
-
-            foreach (var raw in paths)
-            {
-                var path = Path.GetFullPath(raw);
-                var docId = working.GetDocumentIdsWithFilePath(path).FirstOrDefault();
-
-                if (docId is not null && File.Exists(path))        // changed
-                {
-                    working = working.WithDocumentText(docId, await ReadAsync(path, ct));
-                    reloaded.Add(path);
-                }
-                else if (docId is not null)
-                {
-                    working = working.RemoveDocument(docId);
-                    removed.Add(path);
-                }
-                else if (File.Exists(path))
-                {
-                    var project = InferProject(working, path);
-                    if (project is null)
-                    { unmapped.Add(path); continue; }
-                    var doc = project.AddDocument(Path.GetFileName(path), await ReadAsync(path, ct), filePath: path);
-                    working = doc.Project.Solution;
-                    added.Add(path);
-                }
-                else
-                    unmapped.Add(path);
-            }
-
-            if (reloaded.Count + added.Count + removed.Count > 0)
-                _sourcePathCache.Clear();
-
-            Volatile.Write(ref _solution, working);
-            return new RefreshResult(reloaded.ToArray(), added.ToArray(), removed.ToArray(), unmapped.ToArray());
+            return await RefreshCoreAsync(paths, ct);
         }
         finally { _gate.Release(); }
+    }
+
+    // Caller holds _gate.
+    async ValueTask<RefreshResult> RefreshCoreAsync(IReadOnlyList<string> paths, CancellationToken ct)
+    {
+        var working = Volatile.Read(ref _solution)
+            ?? throw new InvalidOperationException("RefreshAsync called before initialization.");
+        var reloaded = new List<string>();
+        var added = new List<string>();
+        var removed = new List<string>();
+        var unmapped = new List<string>();
+
+        foreach (var raw in paths)
+        {
+            var path = Path.GetFullPath(raw);
+            // A linked file is one path shared by several projects; every copy must follow the disk.
+            var docIds = working.GetDocumentIdsWithFilePath(path);
+
+            if (docIds.Length > 0 && File.Exists(path))        // changed
+            {
+                // Stamp before reading: a write that lands mid-read then shows up on the next sync.
+                var stamped = TryReadStamp(path, out var stamp);
+                var text = await ReadAsync(path, ct);
+                foreach (var docId in docIds)
+                    working = working.WithDocumentText(docId, text);
+                if (stamped && stamp is { } s)
+                    _stamps[path] = s;
+                reloaded.Add(path);
+            }
+            else if (docIds.Length > 0)
+            {
+                foreach (var docId in docIds)
+                    working = working.RemoveDocument(docId);
+                _stamps[path] = null;
+                removed.Add(path);
+            }
+            else if (File.Exists(path))
+            {
+                var project = InferProject(working, path);
+                if (project is null)
+                { unmapped.Add(path); continue; }
+                var stamped = TryReadStamp(path, out var stamp);
+                var doc = project.AddDocument(Path.GetFileName(path), await ReadAsync(path, ct), filePath: path);
+                working = doc.Project.Solution;
+                if (stamped && stamp is { } s)
+                    _stamps[path] = s;
+                added.Add(path);
+            }
+            else
+                unmapped.Add(path);
+        }
+
+        if (reloaded.Count + added.Count + removed.Count > 0)
+            _sourcePathCache.Clear();
+
+        Volatile.Write(ref _solution, working);
+        return new RefreshResult(reloaded.ToArray(), added.ToArray(), removed.ToArray(), unmapped.ToArray());
     }
 
     Project? InferProject(Solution solution, string filePath) =>
