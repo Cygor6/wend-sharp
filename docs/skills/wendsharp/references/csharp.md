@@ -64,8 +64,8 @@ members, `GetImplementations` is the parallel tool.
 
 Roslyn resolves symbols across the whole loaded solution, so `FindReferences`,
 `GetImplementations`, and `PlanRename` see uses in **other projects** that a per-file or
-per-project text search misses. `PlanRename`'s edit list can span projects — apply all of them,
-then `Refresh` every touched file.
+per-project text search misses. `PlanRename`'s `Files` can span projects: apply all of them,
+then run `GetDiagnostics` with every touched file.
 
 ## Nullable reference types and resolved signatures
 

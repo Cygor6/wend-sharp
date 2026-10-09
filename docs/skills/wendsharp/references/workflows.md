@@ -1,37 +1,43 @@
-# WendSharp workflows — step-by-step playbooks
+# WendSharp workflows: step-by-step playbooks
 
 Every workflow ends in the same verification loop:
-`Refresh(changed + new + deleted) → GetDiagnostics → fix → repeat until clean`
+`GetDiagnostics(filePaths = the files you touched) → fix → repeat until ErrorCount is 0`
+
+Edits to existing files are picked up automatically. If the workflow **created**, moved, or
+renamed a file, call `Refresh` with its absolute path first.
 
 `GetDiagnostics` returns compiler errors **and** analyzer/spec diagnostics (banned APIs,
-project-specific rules, etc.). Both are blocking: a task is not done until `errorCount == 0`.
+project-specific rules, etc.). Both are blocking: a task is not done until `ErrorCount == 0`.
 
 Projects may encode specifications as Roslyn analyzers escalated to Error via `.editorconfig`.
 The diagnostic message states the rule and usually the fix (banned-symbol messages carry the
-replacement API) — follow it in the code being edited.
+replacement API): follow it in the code being edited.
 
-If you don't know the project name, call `GetWorkspaceInfo` before starting any workflow.
+`projectName` is optional in every step below. If a call answers `Ambiguous`, pick one of its
+`Candidates` and re-call with that `Name` (plus `ParameterTypes` for a method).
 
 ---
 
 ## Rename a symbol across the solution
 
 ```
-1. GetWorkspaceInfo                           # confirm project name
-2. PlanRename(project, locator, newName)
-   locator = filePath+line+column  OR  fullyQualifiedSymbolName
-3. Inspect the result:
+1. PlanRename(locator, newName)
+   locator = filePath + line + column  OR  fullyQualifiedSymbolName (+ parameterTypes for an overload)
+2. Follow Next:
    - HasConflicts == true?  STOP. Report the collision. Do not apply.
-   - Ambiguous error?       Re-call with the fully-qualified metadata name.
+   - Truncated == true?     Call PlanRename again with the same arguments and filePaths = the
+                            files whose Lines is missing. Do this BEFORE applying anything.
    - else: proceed.
-4. Group Edits[] by file.
-   Within each file, apply in DESCENDING StartOffset order (last edit first).
-   Use StartOffset + Length + NewText — offsets index the original file.
-5. If FileRenames[] is non-empty, rename each file on disk OldPath → NewPath.
-6. Refresh(every changed file + every renamed file at its new path).
-7. GetDiagnostics(project, filePaths = the files you touched).
+3. For each file in Files[]:
+   - ReplaceAll == true  → you may replace every OldName with NewName in that file, or
+   - apply each Lines[] entry: replace Before with After (use Line when the same Before
+     occurs more than once).
+   Review lines whose Location includes Comment or String: those are plain-text matches.
+4. If FileRenames[] is non-empty, rename each file on disk OldPath → NewPath,
+   then Refresh(the new paths).
+5. GetDiagnostics(filePaths = the files you touched).
    - clean? done.
-   - errors? fix → Refresh → GetDiagnostics again.
+   - errors? fix → GetDiagnostics again.
 ```
 
 ---
@@ -39,17 +45,17 @@ If you don't know the project name, call `GetWorkspaceInfo` before starting any 
 ## Change a method or interface signature
 
 ```
-1. DescribeSymbol(project, type)  OR  AnalyzeMember(project, type, member)
+1. DescribeSymbol(type)  OR  AnalyzeMember(type, member)
    → confirm the exact current signature.
-2. FindReferences(project, symbol)
+2. FindReferences(symbol)
    → every call site that passes or uses the old signature.
-   (Ambiguous? re-call with the metadata name.)
+   (Truncated? page with offset = NextOffset until you have Total.)
 3. If the member is virtual/abstract/override:
-   GetOverrides(project, type, member)      → every override that must match.
+   GetOverrides(type, member)      → every override that must match.
 4. If the symbol is an interface or base-class member:
-   GetImplementations(project, type)        → every implementer that must match.
+   GetImplementations(type)        → every implementer that must match.
 5. Edit the declaration AND every site surfaced in steps 2–4.
-6. Refresh(all changed files) → GetDiagnostics → repeat until clean.
+6. GetDiagnostics(filePaths = all changed files) → repeat until clean.
 ```
 
 Skipping steps 3–4 is the classic break: changing one link of a virtual/interface chain
@@ -61,14 +67,14 @@ without the others compiles to a confusing error later.
 
 ```
 1. ExploreCode(file)                          # see the shape cheaply.
-2. AnalyzeMember(project, type, member)
+2. AnalyzeMember(type, member)                # includeSource: true if you need the body text
    → InternalDependencies: what must move or become a parameter.
    → ExternalDependencies: what the extracted code still needs in scope.
    → DataFlowsIn / DataFlowsOut: the data flow across the new boundary.
    → Callers: what will break if the signature changes.
 3. Perform the extraction (new method, or new class in a new file).
-4. Refresh(all changed files + any new file you created).
-5. GetDiagnostics → fix until clean.
+4. Refresh(any NEW file you created).
+5. GetDiagnostics(filePaths = changed + new files) → fix until clean.
 ```
 
 ---
@@ -78,11 +84,11 @@ without the others compiles to a confusing error later.
 For an adapter, test double, DI registration, or anything that must implement a contract:
 
 ```
-1. DescribeSymbol(project, type)
+1. DescribeSymbol(type)
    → copy RequiredUsings verbatim into the new file.
    → match Members[] signatures exactly (compiler-resolved, never `var`).
 2. Write the new code.
-3. Refresh(new file) → GetDiagnostics → fix until clean.
+3. Refresh(new file) → GetDiagnostics(filePaths = [new file]) → fix until clean.
 ```
 
 ---
@@ -90,9 +96,10 @@ For an adapter, test double, DI registration, or anything that must implement a 
 ## Orient in an unfamiliar codebase
 
 ```
-1. GetWorkspaceInfo                           # solution, projects, roots.
-2. ExploreCode(entry file or suspected file)  # map the structure cheaply.
-3. DescribeSymbol / AnalyzeMember on parts that matter.
+1. ExploreCode(entry file or suspected file)  # map the structure cheaply.
+2. DescribeSymbol / AnalyzeMember on parts that matter.
+3. GetWorkspaceInfo only if a lookup returns NotFound for a symbol you can see
+   (EmptyProjects / LoadDiagnostics explain a project that failed to load).
 ```
 
 ---
@@ -102,10 +109,10 @@ For an adapter, test double, DI registration, or anything that must implement a 
 When you're not sure how far a change reaches:
 
 ```
-FindReferences(project, symbol)          → call sites
-GetImplementations(project, type)        → implementers of an interface/base
-GetOverrides(project, type, member)      → overrides of a virtual/abstract member
+FindReferences(symbol)          → call sites
+GetImplementations(type)        → implementers of an interface/base
+GetOverrides(type, member)      → overrides of a virtual/abstract member
 ```
 
 Together these are the full affected surface. Text search gives you a subset, with false
-positives.
+positives. Page each with `offset = NextOffset` while `Truncated` is true.
