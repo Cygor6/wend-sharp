@@ -100,17 +100,23 @@ inheritance, generic constraints, and other files/projects.
   For every ordinary open type it is `false` (with `IsClosed`/`IsUnion` false and
   `DirectDerivedTypes` empty), which is the honest answer rather than a silent assumption.
 
-## GetOverrides: the override chain
+## GetOverrides: what a call can dispatch to
 
-Every override of a virtual/abstract member across the whole chain, not just direct subclasses.
+Every member that can run in place of the given one: for a virtual/abstract member, every
+override across the whole chain (not just direct subclasses); for an **interface member**, every
+implementation, implicit or explicit, plus the overrides of implementations that are themselves
+virtual.
 
 - The other half of `FindReferences`: that finds call sites, this finds alternate
-  implementations. Run **before** changing a virtual/abstract member's signature or contract.
+  implementations. Run **before** changing a virtual, abstract, or interface member's signature or
+  contract.
+- `typeName` must be the type that **declares** the member. Asking a derived type or interface for
+  an inherited member returns `MemberNotFound` with the declaring member in `Candidates`.
 - **Overloads:** pass `parameterTypes` as listed in `Candidates[].ParameterTypes`.
 - `limit` (default 100) / `offset`.
-- `Kind`: `Abstract`/`Virtual`/`Override` on success; `NotOverridable` (the member isn't
-  virtual/abstract/override); `Ambiguous` (type name or overload); `TypeNotFound`;
-  `MemberNotFound`; `Error`.
+- `Kind`: `Abstract`/`Virtual`/`Override`/`InterfaceMember` on success; `NotOverridable` (not
+  virtual/abstract/override and not an implementable interface member); `Ambiguous` (type name or
+  overload); `TypeNotFound`; `MemberNotFound`; `Error`.
 - Returns `Symbol`, `Kind`, `Total`, `Overrides[]` (same shape as implementations), `Truncated`,
   `NextOffset`.
 

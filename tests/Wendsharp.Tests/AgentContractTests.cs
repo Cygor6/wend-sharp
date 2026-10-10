@@ -282,6 +282,61 @@ public class AgentContractTests
         }
     }
 
+    // --- Dispatch targets of an interface member ---------------------------------------------------
+
+    [Test]
+    public async Task GetOverrides_InterfaceMember_ReturnsImplementationsInsteadOfEmpty()
+    {
+        var tools = await CreateToolsAsync();
+
+        var result = await tools.GetOverrides("SampleApp.IComputable", "Compute", ct: CancellationToken.None);
+
+        await Assert.That(result.Error).IsNull();
+        await Assert.That(result.Kind).IsEqualTo("InterfaceMember");
+        await Assert.That(result.Total).IsEqualTo(1);
+        await Assert.That(result.Overrides[0].Signature).Contains("SampleApp.ComputableImpl.Compute");
+    }
+
+    [Test]
+    public async Task GetOverrides_InterfaceMember_IncludesExplicitImplementationsAndOverridesOfImplementations()
+    {
+        var tools = await CreateToolsAsync();
+
+        var result = await tools.GetOverrides("IShape", "Area", ct: CancellationToken.None);
+
+        await Assert.That(result.Error).IsNull();
+        await Assert.That(result.Kind).IsEqualTo("InterfaceMember");
+        await Assert.That(result.Total).IsEqualTo(3);
+        var signatures = result.Overrides.Select(o => o.Signature).ToList();
+        await Assert.That(signatures.Any(s => s.Contains("SampleApp.Square.Area"))).IsTrue();
+        await Assert.That(signatures.Any(s => s.Contains("SampleApp.LargeSquare.Area"))).IsTrue();
+        await Assert.That(signatures.Any(s => s.Contains("SampleApp.Circle."))).IsTrue();
+    }
+
+    [Test]
+    public async Task GetOverrides_ImplementingVirtualMember_StillReturnsItsOverrides()
+    {
+        var tools = await CreateToolsAsync();
+
+        var result = await tools.GetOverrides("SampleApp.Square", "Area", ct: CancellationToken.None);
+
+        await Assert.That(result.Kind).IsEqualTo("Virtual");
+        await Assert.That(result.Total).IsEqualTo(1);
+        await Assert.That(result.Overrides[0].Signature).Contains("SampleApp.LargeSquare.Area");
+    }
+
+    [Test]
+    public async Task GetOverrides_InheritedMember_NamesTheDeclaringTypeAsCandidate()
+    {
+        var tools = await CreateToolsAsync();
+
+        var result = await tools.GetOverrides("SampleApp.INamedShape", "Area", ct: CancellationToken.None);
+
+        await Assert.That(result.Kind).IsEqualTo("MemberNotFound");
+        await Assert.That(result.Error!).Contains("SampleApp.IShape");
+        await Assert.That(result.Candidates!.Select(c => c.Name).ToList()).Contains("SampleApp.IShape.Area");
+    }
+
     // --- PlanRename shaped for text-matching edit tools -------------------------------------------
 
     [Test]

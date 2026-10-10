@@ -80,6 +80,17 @@ names.
 
 ---
 
+## Zero overrides for an interface member (older builds)
+
+**Symptom:** `GetOverrides` on an interface member returns `Total: 0` with no `Error`, although
+classes implement it.
+**Cause:** Builds before this fix only looked for overrides, and Roslyn does not count interface
+implementations as overrides.
+**Fix:** Current builds return the implementations with `Kind: "InterfaceMember"`. On an older
+build, use `GetImplementations` on the interface and inspect the implementing types.
+
+---
+
 ## Guessing namespaces or types
 
 **Symptom:** Build breaks on a missing or wrong `using`, or a type you assumed.

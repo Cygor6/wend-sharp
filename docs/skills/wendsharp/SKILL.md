@@ -28,7 +28,7 @@ the failure catalogue.
 | Understand what a method depends on | `AnalyzeMember` |
 | Check compiler/analyzer errors after an edit | `GetDiagnostics` with `filePaths` |
 | Find all types that implement an interface | `GetImplementations` |
-| Find all overrides of a virtual member | `GetOverrides` |
+| Find all overrides of a virtual member, or implementations of an interface member | `GetOverrides` |
 | A lookup says NotFound for a symbol you can see | `GetWorkspaceInfo` (`EmptyProjects`) |
 
 Use standard read_file/grep only for non-C# files or when WendSharp is unavailable.

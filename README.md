@@ -30,7 +30,7 @@ resolved (never `var`).
 | `DescribeSymbol` | A type's full public/protected surface with resolved types, base types, interfaces, and the `using` directives needed to author an interface against it. |
 | `FindReferences` | Semantic references to a type/member across the solution (no false text matches). |
 | `GetImplementations` | Every concrete type implementing an interface or deriving from a class, across multi-level inheritance and other files/projects (resolved via Roslyn's symbol graph). `Closed.IsExhaustive` tells you whether that set is *provably* complete (a C# 15 `closed` hierarchy or union) or merely everything present in this solution. |
-| `GetOverrides` | Every override of a virtual/abstract member across the whole inheritance chain, not just direct subclasses. |
+| `GetOverrides` | Everything a call can dispatch to: every override of a virtual/abstract member across the whole inheritance chain, or every implementation (implicit and explicit, plus their overrides) of an interface member. |
 | `AnalyzeMember` | A method's internal/external dependencies, data flow (read/written variables), and callers. Powers "extract logic". |
 | `PlanRename` | Computes a compiler-verified rename plan **without modifying code**: per file, the changed lines as `Before`/`After` (ready for any text-matching edit tool) and a `ReplaceAll` flag, plus conflicts (name collisions & new compile errors) and cascade targets (overrides, interface members, partial declarations) that text search misses. Offset-level edits on request. wend-sharp does NOT apply it: apply the lines yourself, then `GetDiagnostics`. |
 | `Refresh` | Add files the agent created, moved, or renamed. Edits to existing files and deletions are picked up automatically on every call. |

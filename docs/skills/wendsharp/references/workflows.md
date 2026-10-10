@@ -50,9 +50,9 @@ replacement API): follow it in the code being edited.
 2. FindReferences(symbol)
    → every call site that passes or uses the old signature.
    (Truncated? page with offset = NextOffset until you have Total.)
-3. If the member is virtual/abstract/override:
-   GetOverrides(type, member)      → every override that must match.
-4. If the symbol is an interface or base-class member:
+3. If the member is virtual/abstract/override, or an interface member:
+   GetOverrides(declaringType, member) → every override or implementation that must match.
+4. If you change a whole interface or base class (not one member):
    GetImplementations(type)        → every implementer that must match.
 5. Edit the declaration AND every site surfaced in steps 2–4.
 6. GetDiagnostics(filePaths = all changed files) → repeat until clean.
@@ -111,7 +111,7 @@ When you're not sure how far a change reaches:
 ```
 FindReferences(symbol)          → call sites
 GetImplementations(type)        → implementers of an interface/base
-GetOverrides(type, member)      → overrides of a virtual/abstract member
+GetOverrides(type, member)      → overrides of a virtual/abstract member, implementations of an interface member
 ```
 
 Together these are the full affected surface. Text search gives you a subset, with false

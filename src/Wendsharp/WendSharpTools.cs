@@ -216,27 +216,28 @@ public sealed class WendSharpTools(WorkspaceSession session)
 #pragma warning restore RSEXPERIMENTAL006
 
     // =========================================================================
-    // GetOverrides - every override of a virtual/abstract member.
+    // GetOverrides - every member that can run in place of a virtual, abstract, or interface member.
     // =========================================================================
     [McpServerTool(Name = "GetOverrides", Title = "Find overrides",
                    ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false,
                    UseStructuredContent = true)]
-    [Description("Find every override of this virtual or abstract member across the whole inheritance chain, not just " +
-                 "direct subclasses, resolved via Roslyn's symbol graph. This is the other half of FindReferences: FindReferences " +
-                 "finds call sites; GetOverrides finds alternate implementations of the same member. Use this BEFORE changing a " +
-                 "virtual/abstract member's signature, return type, or contract: every result must be updated to match. " +
-                 "Kind \"NotOverridable\" means the member is not virtual/abstract/override and cannot have overrides. " +
+    [Description("Find every member that can run in place of this one: for a virtual or abstract member, every override across " +
+                 "the whole inheritance chain; for an interface member (Kind \"InterfaceMember\"), every implementation, implicit " +
+                 "or explicit, plus the overrides of those implementations. Resolved via Roslyn's symbol graph. This is the other " +
+                 "half of FindReferences: FindReferences finds call sites; GetOverrides finds what a call can dispatch to. Use this " +
+                 "BEFORE changing such a member's signature, return type, or contract: every result must be updated to match. " +
+                 "Kind \"NotOverridable\" means the member is not virtual/abstract/override or an implementable interface member. " +
                  "Kind \"Ambiguous\", \"TypeNotFound\" or \"MemberNotFound\": Error explains and Candidates lists what to choose " +
                  "from. Results are paged: limit defaults to 100; Truncated: true means re-call with offset = NextOffset. " +
                  "Check Error first.")]
     public async Task<GetOverridesResult> GetOverrides(
-        [Description("Type that declares the virtual/abstract member: a metadata name (e.g. 'SampleApp.PricingService') or a simple name (e.g. 'PricingService').")] string typeName,
+        [Description("Class or interface that declares the member: a metadata name (e.g. 'SampleApp.PricingService') or a simple name (e.g. 'IShape').")] string typeName,
         [Description("Member name, e.g. 'CalculateTotal'.")] string memberName,
         [Description("Only for an overloaded method: the overload's comma-separated parameter types, e.g. \"int, string\", as " +
                      "listed in Candidates[].ParameterTypes; empty string for the parameterless overload.")] string? parameterTypes = null,
         [Description("Optional project to resolve the type in, e.g. 'App'. Omit it and WendSharp finds the declaring project.")] string? projectName = null,
-        [Description("Maximum number of overrides to return (default 100).")] int limit = 100,
-        [Description("Number of overrides to skip, for paging (default 0). Pass NextOffset from the previous call.")] int offset = 0,
+        [Description("Maximum number of results to return (default 100).")] int limit = 100,
+        [Description("Number of results to skip, for paging (default 0). Pass NextOffset from the previous call.")] int offset = 0,
         CancellationToken ct = default)
     {
         var label = $"{typeName}.{memberName}";
@@ -254,21 +255,11 @@ public sealed class WendSharpTools(WorkspaceSession session)
                 return new GetOverridesResult(label, "TypeNotFound", 0, [], Candidates: OrNull(ex.Suggestions), Error: ex.Message);
             }
 
-            var memberSymbol = ResolveMember(typeSymbol, memberName, parameterTypes);
+            var memberSymbol = ResolveMember(typeSymbol, memberName, parameterTypes, session.Solution);
             if (!IsOverridable(memberSymbol))
                 return new GetOverridesResult(memberSymbol.ToFullSignature(), "NotOverridable", 0, []);
 
-            var solution = session.Solution;
-            var overrides = await SymbolFinder.FindOverridesAsync(memberSymbol, solution, cancellationToken: ct);
-
-            var seen = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
-            var hits = new List<ISymbol>();
-            foreach (var ov in overrides)
-            {
-                if (seen.Add(ov))
-                    hits.Add(ov);
-            }
-
+            var hits = await FindDispatchTargetsAsync(memberSymbol, session.Solution, ct);
             var hitArray = await BuildSymbolHitsAsync(hits, ct);
             var (page, truncated, next) = Page(hitArray, offset, limit);
             return new GetOverridesResult(
@@ -412,7 +403,7 @@ public sealed class WendSharpTools(WorkspaceSession session)
             await session.InitializeAsync(ct);
             var (project, symbol) = await ResolveSymbolAsync(projectName, typeName, typesOnly: true, null, ct);
             var typeSymbol = (INamedTypeSymbol)symbol;
-            var memberSymbol = ResolveMember(typeSymbol, memberName, parameterTypes);
+            var memberSymbol = ResolveMember(typeSymbol, memberName, parameterTypes, project.Solution);
 
             var syntaxRef = memberSymbol.DeclaringSyntaxReferences.FirstOrDefault()
                 ?? throw new ArgumentException($"Member '{memberName}' has no syntax reference.");
@@ -1402,14 +1393,31 @@ public sealed class WendSharpTools(WorkspaceSession session)
             .ToList();
     }
 
-    /// <summary>A member of the type by name; overloads resolve through parameterTypes.</summary>
-    static ISymbol ResolveMember(INamedTypeSymbol type, string memberName, string? parameterTypes)
+    /// <summary>A member of the type by name; overloads resolve through parameterTypes. A member the
+    /// type only inherits is not resolved silently (on a constructed generic base it would mean
+    /// something else); the error names the declaring type and returns its member as a candidate.</summary>
+    static ISymbol ResolveMember(INamedTypeSymbol type, string memberName, string? parameterTypes, Solution solution)
     {
         var candidates = SymbolLookup.FindMembers(type, memberName);
         if (candidates.Count == 1)
             return candidates[0];
         if (candidates.Count > 1)
-            return ResolveOverload(candidates, memberName, parameterTypes, solution: null);
+            return ResolveOverload(candidates, memberName, parameterTypes, solution);
+
+        var inherited = InheritedFrom(type)
+            .SelectMany(t => t.GetMembers(memberName))
+            .Where(m => !m.IsImplicitlyDeclared)
+            .Select(m => m.OriginalDefinition)
+            .Distinct(SymbolEqualityComparer.Default)
+            .ToList();
+        if (inherited.Count > 0)
+        {
+            var owners = string.Join(", ", inherited.Select(m => TypeMetadataName(m.ContainingType)).Distinct());
+            throw new SymbolNotFoundException(
+                $"Member '{memberName}' is not declared in '{type.ToDisplayString()}'; it is inherited from {owners}. " +
+                "Re-call with typeName set to the declaring type (see Candidates).",
+                ToCandidates(inherited, solution));
+        }
 
         var similar = type.GetMembers()
             .Where(m => !m.IsImplicitlyDeclared && m.CanBeReferencedByName
@@ -1421,6 +1429,15 @@ public sealed class WendSharpTools(WorkspaceSession session)
         var hint = similar.Count > 0 ? $" Members with a similar name: {string.Join(", ", similar)}." : "";
         throw new SymbolNotFoundException(
             $"Member '{memberName}' not found in type '{type.ToDisplayString()}'.{hint}", []);
+    }
+
+    /// <summary>Base classes (nearest first, without System.Object) and all inherited interfaces.</summary>
+    static IEnumerable<INamedTypeSymbol> InheritedFrom(INamedTypeSymbol type)
+    {
+        for (var b = type.BaseType; b is not null && b.SpecialType != SpecialType.System_Object; b = b.BaseType)
+            yield return b;
+        foreach (var i in type.AllInterfaces)
+            yield return i;
     }
 
     static bool IsOverloadSet(IReadOnlyList<ISymbol> symbols) =>
@@ -1910,6 +1927,39 @@ public sealed class WendSharpTools(WorkspaceSession session)
             .ToArray();
     }
 
+    /// <summary>Every source member that can run when <paramref name="member"/> is invoked. Roslyn's
+    /// FindOverridesAsync does not count interface implementations as overrides, so an interface
+    /// member used to come back with zero results and no error. For an interface member this takes
+    /// its implementations (implicit and explicit) and, because an implementing member can itself be
+    /// virtual, the overrides of each of those as well.</summary>
+    static async Task<List<ISymbol>> FindDispatchTargetsAsync(ISymbol member, Solution solution, CancellationToken ct)
+    {
+        var seen = new HashSet<ISymbol>(SymbolEqualityComparer.Default) { member };
+        var result = new List<ISymbol>();
+
+        void Add(IEnumerable<ISymbol> symbols)
+        {
+            foreach (var s in symbols)
+            {
+                if (seen.Add(s))
+                    result.Add(s);
+            }
+        }
+
+        if (member.ContainingType?.TypeKind == TypeKind.Interface)
+        {
+            Add(await SymbolFinder.FindImplementationsAsync(member, solution, cancellationToken: ct));
+            foreach (var impl in result.Where(IsOverridable).ToList())
+                Add(await SymbolFinder.FindOverridesAsync(impl, solution, cancellationToken: ct));
+        }
+        else
+        {
+            Add(await SymbolFinder.FindOverridesAsync(member, solution, cancellationToken: ct));
+        }
+
+        return result;
+    }
+
     static bool IsOverridable(ISymbol symbol) => symbol switch
     {
         IMethodSymbol m => m.IsVirtual || m.IsAbstract || m.IsOverride,
@@ -1920,6 +1970,7 @@ public sealed class WendSharpTools(WorkspaceSession session)
 
     static string OverridableKind(ISymbol symbol) => symbol switch
     {
+        { ContainingType.TypeKind: TypeKind.Interface } => "InterfaceMember",
         IMethodSymbol { IsAbstract: true } => "Abstract",
         IMethodSymbol { IsOverride: true } => "Override",
         IPropertySymbol { IsAbstract: true } => "Abstract",
