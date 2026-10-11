@@ -64,8 +64,27 @@ members, `GetImplementations` is the parallel tool.
 
 Roslyn resolves symbols across the whole loaded solution, so `FindReferences`,
 `GetImplementations`, and `PlanRename` see uses in **other projects** that a per-file or
-per-project text search misses. `PlanRename`'s edit list can span projects — apply all of them,
-then `Refresh` every touched file.
+per-project text search misses. `PlanRename`'s `Files` can span projects: apply all of them,
+then run `GetDiagnostics` with every touched file.
+
+## Razor components and views
+
+`.razor` and `.cshtml` files compile through the Razor source generator into C# that only exists
+in memory. A grep for a property finds its uses in markup (`@Model.Name`, `@bind="Model.Name"`)
+but cannot tell them from text, and Roslyn's own rename never touches markup. WendSharp maps the
+generated code back to the markup through its `#line` directives:
+
+- `FindReferences`, `AnalyzeMember`, `DescribeSymbol`, and the other tools report the `.razor`
+  or `.cshtml` file and the exact line in it. `Line: 0` means generated code with no source
+  position (e.g. the getter and setter Razor emits for `@bind`); it is listed only when the file
+  has no exact hit.
+- `PlanRename` edits markup uses in place and also renames members declared in a `@code` block.
+  It verifies the plan by recompiling the regenerated code, so anything it could not edit shows
+  up in `Conflicts`.
+- `ExploreCode` on a `.razor`/`.cshtml` file outlines the component or view class it compiles to.
+- `GetDiagnostics(filePaths: [...razor])` checks the code generated from that file.
+- Locate a symbol in markup by name, not by position: a `.razor` file has no syntax tree of its
+  own.
 
 ## Nullable reference types and resolved signatures
 

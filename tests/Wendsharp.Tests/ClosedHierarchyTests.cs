@@ -113,7 +113,7 @@ public class ClosedHierarchyTests
         var tools = new WendSharpTools(session);
         await session.InitializeAsync(CancellationToken.None);
 
-        var result = await tools.GetImplementations("App", "SampleApp.IComputable", CancellationToken.None);
+        var result = await tools.GetImplementations("SampleApp.IComputable", "App", ct: CancellationToken.None);
 
         await Assert.That(result.Total).IsGreaterThan(0);
         await Assert.That(result.Closed.IsClosed).IsFalse();

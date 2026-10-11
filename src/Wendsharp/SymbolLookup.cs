@@ -92,13 +92,34 @@ public static class SymbolLookup
                 .Where(t => t is not null).Select(t => t!.FilePath),
             StringComparer.OrdinalIgnoreCase);
 
-        var decls = await SymbolFinder.FindDeclarationsAsync(project, name, ignoreCase: false, ct);
+        bool InProject(ISymbol s) => s.Locations.Any(loc => loc.IsInSource
+            && sourceTreePaths.Contains(loc.SourceTree?.FilePath ?? ""));
 
-        return decls
-            .Where(s => s.Locations.Any(loc => loc.IsInSource
-                && sourceTreePaths.Contains(loc.SourceTree?.FilePath ?? "")))
+        var decls = (await SymbolFinder.FindDeclarationsAsync(project, name, ignoreCase: false, ct))
+            .Where(InProject)
             .Distinct(SymbolEqualityComparer.Default)
             .ToList();
+        if (decls.Count > 0)
+            return decls;
+
+        // The exact-name index skips positional record properties (record Tag(string Key): 'Key' is
+        // declared by a parameter). The pattern index has them, so retry there with an exact filter.
+        decls = (await SymbolFinder.FindSourceDeclarationsWithPatternAsync(project, name, SymbolFilter.TypeAndMember, ct))
+            .Where(s => s.Name == name && InProject(s))
+            .Distinct(SymbolEqualityComparer.Default)
+            .ToList();
+        if (decls.Count > 0)
+            return decls;
+
+        // Neither index covers source-generated code (a Razor component, a member in a .razor @code
+        // block); the compilation's declaration table does.
+        var compilation = await project.GetCompilationAsync(ct);
+        return compilation is null
+            ? []
+            : compilation.GetSymbolsWithName(name, SymbolFilter.TypeAndMember, ct)
+                .Where(s => s.Name == name && InProject(s))
+                .Distinct(SymbolEqualityComparer.Default)
+                .ToList();
     }
 
     public static async Task<ISymbol?> FindAtPositionAsync(

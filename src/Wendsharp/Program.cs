@@ -15,7 +15,7 @@ builder.Services.AddSingleton(sp =>
     new WorkspaceSession(sp.GetRequiredService<ILogger<WorkspaceSession>>(), solutionPath));
 
 builder.Services
-    .AddMcpServer()
+    .AddMcpServer(options => options.ServerInstructions = ServerInstructions.Text)
     .WithStdioServerTransport()
     .WithToolsFromAssembly();
 

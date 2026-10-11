@@ -1,0 +1,14 @@
+<div class="card">
+    <h3>@Model.DisplayName</h3>
+    <input @bind="Model.DisplayName" />
+    @if (Model.IsActive)
+    {
+        <span>@Caption</span>
+    }
+</div>
+
+@code {
+    [Parameter] public PersonViewModel Model { get; set; } = new();
+
+    private string Caption => Model.DisplayName.ToUpperInvariant();
+}
